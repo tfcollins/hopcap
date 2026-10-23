@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: MIT
 """hdl/hopctrl_regmap.json is the single source for the controller register map.
 The RTL's ID/VERSION words and every register offset the RTL decodes must match it."""
+
 from __future__ import annotations
 
 import json

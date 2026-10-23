@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: MIT
 """Hop-controller programmer against a register model derived from hdl/hopctrl_regmap.json."""
+
 from __future__ import annotations
 
 import json
@@ -25,8 +26,12 @@ class FakeMmio:
 
     def __init__(self, regs: HopCtrlRegs):
         self.r = regs
-        self.mem: dict[int, int] = {regs.ID: regs.id_word, regs.VERSION: regs.version_word,
-                                    regs.SETTLE_TICKS: 0x7D0, regs.SEQ_SLOT_COUNT: 8}
+        self.mem: dict[int, int] = {
+            regs.ID: regs.id_word,
+            regs.VERSION: regs.version_word,
+            regs.SETTLE_TICKS: 0x7D0,
+            regs.SEQ_SLOT_COUNT: 8,
+        }
         self.writes: list[tuple[int, int]] = []
         self.state = 0
         self.enabled = False
@@ -37,9 +42,20 @@ class FakeMmio:
 
     def read32(self, off: int) -> int:
         if off == self.r.CTRL_STATUS:
-            gate = 1 if (not self.enabled or (self.state == 0 and self.idle_open) or self.state == 4) else 0
-            return (self.state | gate << 3 | self.superseded_sticky << 4 | self.drain_timeout_sticky << 5
-                    | self.enabled << 8 | self.slot_source << 9 | self.idle_open << 11)
+            gate = (
+                1
+                if (not self.enabled or (self.state == 0 and self.idle_open) or self.state == 4)
+                else 0
+            )
+            return (
+                self.state
+                | gate << 3
+                | self.superseded_sticky << 4
+                | self.drain_timeout_sticky << 5
+                | self.enabled << 8
+                | self.slot_source << 9
+                | self.idle_open << 11
+            )
         return self.mem.get(off, 0)
 
     def write32(self, off: int, value: int) -> None:
@@ -78,8 +94,12 @@ def test_identify_rejects_wrong_id(regs):
 def test_program_writes_slots_settle_capture_then_enables(regs):
     m = FakeMmio(regs)
     hc = HopController(m, regs)
-    plan = HopPlan(frequencies_hz=(2_410 * MHZ, 2_420 * MHZ), period_ticks=10_000_000,
-                   settle_ticks=12_345, capture_ticks=67_890)
+    plan = HopPlan(
+        frequencies_hz=(2_410 * MHZ, 2_420 * MHZ),
+        period_ticks=10_000_000,
+        settle_ticks=12_345,
+        capture_ticks=67_890,
+    )
     slots = SlotTable.from_plan(plan)
     hc.program(plan, slots)
     # every slot word is written lo then hi, unused slots zeroed
@@ -115,8 +135,8 @@ def test_require_idle_fails_closed_on_sticky_or_busy(regs):
     m = FakeMmio(regs)
     hc = HopController(m, regs)
     m.enabled = True
-    hc.require_idle()                      # IDLE, clean
-    m.state = 4                            # OPEN with capture_ticks=0 is "idle enough"? no: fail
+    hc.require_idle()  # IDLE, clean
+    m.state = 4  # OPEN with capture_ticks=0 is "idle enough"? no: fail
     with pytest.raises(HopCtrlError, match="state"):
         hc.require_idle()
     m.state = 0
@@ -130,7 +150,7 @@ def test_wait_drained_requires_epoch_advance_and_quiescence(regs):
     hc = HopController(m, regs)
     m.enabled = True
     m.mem[regs.EPOCH] = 4
-    m.state = 5                            # CLOSED after the last capture
+    m.state = 5  # CLOSED after the last capture
     hc.wait_drained(expected_events=4, timeout_s=0.01, sleep=lambda s: None)
     m.mem[regs.EPOCH] = 3
     with pytest.raises(HopCtrlError, match="epoch"):

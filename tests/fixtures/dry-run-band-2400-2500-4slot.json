@@ -1,0 +1,132 @@
+{
+  "schema": "hopcap-dry-run/v1",
+  "plan": {
+    "frequencies_hz": [
+      2410000000,
+      2440000000,
+      2470000000,
+      2490000000
+    ],
+    "period_ticks": 5000000,
+    "settle_ticks": 20000,
+    "capture_ticks": 100000,
+    "pulse_ticks": 1000000,
+    "lead_ticks": 5000000,
+    "init_frequency_hz": 2450000000,
+    "band_hz": [
+      2400000000,
+      2500000000
+    ],
+    "context_margin_ticks": 10000,
+    "name": "band-2400-2500-4slot"
+  },
+  "tick_hz": 100000000,
+  "t0_ticks": 0,
+  "sample_rate_hz": 245760000,
+  "capture_samples": 245760,
+  "slots": {
+    "frequencies_hz": [
+      2450000000,
+      2410000000,
+      2440000000,
+      2470000000,
+      2490000000
+    ],
+    "words_q44_20": [
+      "2569011200000000",
+      "2527068160000000",
+      "2558525440000000",
+      "2589982720000000",
+      "2610954240000000",
+      "0",
+      "0",
+      "0"
+    ]
+  },
+  "edges": [
+    {
+      "index": 0,
+      "commits_hz": 2450000000,
+      "stage_before_hz": 2410000000,
+      "slot": 0,
+      "rise_ticks": 5000000,
+      "fall_ticks": 6000000,
+      "priming": true,
+      "rise_sequence_id": 4096,
+      "fall_sequence_id": 8192,
+      "rise_descriptor_hex": "0x00300001,0x00000001,0x004c4b40,0x00000000,0x00000003,0x00001000,0x0000000f,0x00000001,0x00000000,0x00000000,0x00000000,0x00000000",
+      "fall_descriptor_hex": "0x00300001,0x00000001,0x005b8d80,0x00000000,0x00000002,0x00002000,0x00000001,0x00000000,0x00000000,0x00000000,0x00000000,0x00000000",
+      "capture_open_ticks": 5020000,
+      "capture_close_ticks": 5120000
+    },
+    {
+      "index": 1,
+      "commits_hz": 2410000000,
+      "stage_before_hz": 2440000000,
+      "slot": 1,
+      "rise_ticks": 10000000,
+      "fall_ticks": 11000000,
+      "priming": false,
+      "rise_sequence_id": 4097,
+      "fall_sequence_id": 8193,
+      "rise_descriptor_hex": "0x00300001,0x00000001,0x00989680,0x00000000,0x00000003,0x00001001,0x0000000f,0x00000003,0x00000000,0x00000000,0x00000000,0x00000000",
+      "fall_descriptor_hex": "0x00300001,0x00000001,0x00a7d8c0,0x00000000,0x00000002,0x00002001,0x00000001,0x00000000,0x00000000,0x00000000,0x00000000,0x00000000",
+      "capture_open_ticks": 10020000,
+      "capture_close_ticks": 10120000
+    },
+    {
+      "index": 2,
+      "commits_hz": 2440000000,
+      "stage_before_hz": 2470000000,
+      "slot": 2,
+      "rise_ticks": 15000000,
+      "fall_ticks": 16000000,
+      "priming": false,
+      "rise_sequence_id": 4098,
+      "fall_sequence_id": 8194,
+      "rise_descriptor_hex": "0x00300001,0x00000001,0x00e4e1c0,0x00000000,0x00000003,0x00001002,0x0000000f,0x00000005,0x00000000,0x00000000,0x00000000,0x00000000",
+      "fall_descriptor_hex": "0x00300001,0x00000001,0x00f42400,0x00000000,0x00000002,0x00002002,0x00000001,0x00000000,0x00000000,0x00000000,0x00000000,0x00000000",
+      "capture_open_ticks": 15020000,
+      "capture_close_ticks": 15120000
+    },
+    {
+      "index": 3,
+      "commits_hz": 2470000000,
+      "stage_before_hz": 2490000000,
+      "slot": 3,
+      "rise_ticks": 20000000,
+      "fall_ticks": 21000000,
+      "priming": false,
+      "rise_sequence_id": 4099,
+      "fall_sequence_id": 8195,
+      "rise_descriptor_hex": "0x00300001,0x00000001,0x01312d00,0x00000000,0x00000003,0x00001003,0x0000000f,0x00000007,0x00000000,0x00000000,0x00000000,0x00000000",
+      "fall_descriptor_hex": "0x00300001,0x00000001,0x01406f40,0x00000000,0x00000002,0x00002003,0x00000001,0x00000000,0x00000000,0x00000000,0x00000000,0x00000000",
+      "capture_open_ticks": 20020000,
+      "capture_close_ticks": 20120000
+    },
+    {
+      "index": 4,
+      "commits_hz": 2490000000,
+      "stage_before_hz": null,
+      "slot": 4,
+      "rise_ticks": 25000000,
+      "fall_ticks": 26000000,
+      "priming": false,
+      "rise_sequence_id": 4100,
+      "fall_sequence_id": 8196,
+      "rise_descriptor_hex": "0x00300001,0x00000001,0x017d7840,0x00000000,0x00000003,0x00001004,0x0000000f,0x00000009,0x00000000,0x00000000,0x00000000,0x00000000",
+      "fall_descriptor_hex": "0x00300001,0x00000001,0x018cba80,0x00000000,0x00000002,0x00002004,0x00000001,0x00000000,0x00000000,0x00000000,0x00000000,0x00000000",
+      "capture_open_ticks": 25020000,
+      "capture_close_ticks": 25120000
+    }
+  ],
+  "timing": {
+    "ok": true,
+    "busy_ticks": 1130000,
+    "period_ticks": 5000000,
+    "slack_ticks": 3870000,
+    "end_ticks": 25120000,
+    "duration_s": 0.2512
+  },
+  "pipeline_note": "edge k commits the frequency staged before edge k-1; edge 0 primes on init_frequency_hz"
+}

@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: MIT
 """Hop plan compilation: slot table, FHM one-behind pipeline, edge timing, fail-closed checks."""
+
 from __future__ import annotations
 
 import pytest
@@ -20,8 +21,14 @@ A, B, C = 2_410 * MHZ, 2_420 * MHZ, 2_430 * MHZ
 
 
 def plan(**kw) -> HopPlan:
-    base = dict(frequencies_hz=(A, B, C), period_ticks=5_000_000, settle_ticks=20_000,
-                capture_ticks=1_000_000, pulse_ticks=1_000_000, lead_ticks=5_000_000)
+    base = dict(
+        frequencies_hz=(A, B, C),
+        period_ticks=5_000_000,
+        settle_ticks=20_000,
+        capture_ticks=1_000_000,
+        pulse_ticks=1_000_000,
+        lead_ticks=5_000_000,
+    )
     base.update(kw)
     return HopPlan(**base)
 
@@ -82,18 +89,21 @@ def test_pipeline_model_tracks_executed_and_dropped_edges():
     """Mirrors the validated tron sequence: arm(A), edge -> init; arm(B), edge -> A; ..."""
     m = FhmPipelineModel(init_hz=INIT)
     m.stage(A)
-    assert m.on_edge(executed=True) == INIT       # priming edge lands on init
+    assert m.on_edge(executed=True) == INIT  # priming edge lands on init
     m.stage(B)
     assert m.on_edge(executed=True) == A
     m.stage(C)
-    assert m.on_edge(executed=False) == A         # LATE_DROPPED: nothing moves
+    assert m.on_edge(executed=False) == A  # LATE_DROPPED: nothing moves
     assert m.on_edge(executed=True) == B
     assert m.expected_hz == B
-    assert m.on_edge(executed=True) == C          # drain edge with nothing new staged
-    assert m.on_edge(executed=True) == C          # ... and the pipeline holds steady
+    assert m.on_edge(executed=True) == C  # drain edge with nothing new staged
+    assert m.on_edge(executed=True) == C  # ... and the pipeline holds steady
 
 
 def test_capture_samples_round_trip_ticks():
     p = plan()
     assert p.capture_samples(sample_rate_hz=245_760_000) == 1_000_000 * 245_760_000 // TICK_HZ
-    assert HopPlan.ticks_for_samples(2_457_600, sample_rate_hz=245_760_000, tick_hz=TICK_HZ) == 1_000_000
+    assert (
+        HopPlan.ticks_for_samples(2_457_600, sample_rate_hz=245_760_000, tick_hz=TICK_HZ)
+        == 1_000_000
+    )

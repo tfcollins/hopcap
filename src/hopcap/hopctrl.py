@@ -6,6 +6,7 @@ never disagree with the RTL (both are tested against the same file).  The transp
 object with ``read32(offset) -> int`` and ``write32(offset, value)``; see
 :mod:`hopcap.transport` for the on-target ``/dev/mem`` helper and the ``devmem`` fallback.
 """
+
 from __future__ import annotations
 
 import json
@@ -107,8 +108,14 @@ class HopController:
         return ascii_, self.m.read32(self.r.VERSION)
 
     # -- programming ----------------------------------------------------------
-    def program(self, plan: HopPlan, slots: SlotTable, *, sequence_mode: bool = False,
-                drain_timeout_ticks: int = 0) -> None:
+    def program(
+        self,
+        plan: HopPlan,
+        slots: SlotTable,
+        *,
+        sequence_mode: bool = False,
+        drain_timeout_ticks: int = 0,
+    ) -> None:
         """Write slot table, settle, capture, then enable with stickies cleared."""
         self.m.write32(self.r.CTRL_STATUS, CTRL_IDLE_OPEN)  # disable while reprogramming
         for i, word in enumerate(slots.words()):
@@ -130,8 +137,11 @@ class HopController:
 
     def clear_stickies(self) -> None:
         st = self.m.read32(self.r.CTRL_STATUS)
-        keep = (CTRL_ENABLE if st & ST_ENABLE else 0) | (CTRL_SLOT_SOURCE_SEQ if st & ST_SLOT_SOURCE else 0) \
+        keep = (
+            (CTRL_ENABLE if st & ST_ENABLE else 0)
+            | (CTRL_SLOT_SOURCE_SEQ if st & ST_SLOT_SOURCE else 0)
             | (CTRL_IDLE_OPEN if st & ST_IDLE_OPEN else 0)
+        )
         self.m.write32(self.r.CTRL_STATUS, keep | CTRL_W1C_CLEAR)
 
     # -- observation ------------------------------------------------------------
@@ -169,8 +179,14 @@ class HopController:
             raise HopCtrlError(f"superseded sticky set (count {st.superseded_count})")
         return st
 
-    def wait_drained(self, *, expected_events: int, timeout_s: float = 2.0,
-                     poll_s: float = 0.02, sleep: Callable[[float], None] = time.sleep) -> Status:
+    def wait_drained(
+        self,
+        *,
+        expected_events: int,
+        timeout_s: float = 2.0,
+        poll_s: float = 0.02,
+        sleep: Callable[[float], None] = time.sleep,
+    ) -> Status:
         """After the last edge: wait until no Context is in flight and the gate has shut
         or returned to idle, then check the epoch advanced by exactly ``expected_events``."""
         quiet = {self.r.states["IDLE"], self.r.states["OPEN"], self.r.states["CLOSED"]}

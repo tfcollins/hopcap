@@ -4,6 +4,7 @@
 Record = ``<QQIIHH`` header (mono_ns, real_ns, len, peer_ipv4, peer_port, pad) + ``len`` bytes.
 Arrival times are kept per datagram so the host clock domain survives into the manifest.
 """
+
 from __future__ import annotations
 
 import socket
@@ -36,7 +37,11 @@ def _int_to_ip(v: int) -> str:
 def write_records(fp: BinaryIO, records: Iterable[Record]) -> int:
     n = 0
     for r in records:
-        fp.write(HEADER_STRUCT.pack(r.mono_ns, r.real_ns, len(r.data), _ip_to_int(r.peer_ip), r.peer_port, 0))
+        fp.write(
+            HEADER_STRUCT.pack(
+                r.mono_ns, r.real_ns, len(r.data), _ip_to_int(r.peer_ip), r.peer_port, 0
+            )
+        )
         fp.write(r.data)
         n += 1
     return n

@@ -7,6 +7,7 @@ Each edge is two descriptors: a rising edge that writes trigger+slot and reports
 completion, and a falling edge ``pulse_ticks`` later that clears only bit 0 and reports
 nothing (so the one-entry completion window never head-of-line blocks on it).
 """
+
 from __future__ import annotations
 
 from collections.abc import Iterable

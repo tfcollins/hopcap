@@ -16,6 +16,7 @@ The hop controller publishes the slot word selected on ``gpio_out[3:1]``; the ho
 therefore puts, in slot ``edge.slot``, the frequency that is live **after** that edge.
 Nothing about the pipeline leaks into RTL.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -46,9 +47,9 @@ class HopPlan:
     period_ticks: int
     settle_ticks: int
     capture_ticks: int
-    pulse_ticks: int = 1_000_000        # 10 ms at 100 MHz: the width the Tick demo validated
-    lead_ticks: int = 5_000_000         # first edge 50 ms after t0 (demo value)
-    init_frequency_hz: int = 2_450_000_000   # driver fhmInitFrequency default
+    pulse_ticks: int = 1_000_000  # 10 ms at 100 MHz: the width the Tick demo validated
+    lead_ticks: int = 5_000_000  # first edge 50 ms after t0 (demo value)
+    init_frequency_hz: int = 2_450_000_000  # driver fhmInitFrequency default
     band_hz: tuple[int, int] = (2_400_000_000, 2_500_000_000)
     context_margin_ticks: int = 10_000  # time for the 22-word Context to leave at 10G, generous
     name: str = "hop-plan"
@@ -62,7 +63,7 @@ class HopPlan:
 
     @staticmethod
     def ticks_for_seconds(seconds: float, *, tick_hz: int = 100_000_000) -> int:
-        return int(round(seconds * tick_hz))
+        return round(seconds * tick_hz)
 
 
 @dataclass(frozen=True)
@@ -101,7 +102,7 @@ class SlotTable:
 class Edge:
     index: int
     commits_hz: int
-    stage_before_hz: int | None   # what the host must have staged before this edge fires
+    stage_before_hz: int | None  # what the host must have staged before this edge fires
     slot: int
     rise_ticks: int
     fall_ticks: int
@@ -126,8 +127,8 @@ class FhmPipelineModel:
     """Host-side model of what the Talise RF PLL should read back after each edge."""
 
     init_hz: int
-    staged_hz: int = field(init=False)    # most recent frequency_hopping_mode write
-    armed_hz: int = field(init=False)     # what the next edge will commit
+    staged_hz: int = field(init=False)  # most recent frequency_hopping_mode write
+    armed_hz: int = field(init=False)  # what the next edge will commit
     expected_hz: int = field(init=False)  # what the PLL should read back now
 
     def __post_init__(self) -> None:
@@ -173,7 +174,7 @@ def compile_plan(plan: HopPlan, *, t0_ticks: int, tick_hz: int) -> CompiledPlan:
     edges: list[Edge] = []
     commits = [plan.init_frequency_hz, *plan.frequencies_hz]
     stage_before = [*plan.frequencies_hz, None]
-    for k, (commit, stage) in enumerate(zip(commits, stage_before)):
+    for k, (commit, stage) in enumerate(zip(commits, stage_before, strict=True)):
         rise = t0_ticks + plan.lead_ticks + k * plan.period_ticks
         edges.append(
             Edge(
@@ -186,4 +187,6 @@ def compile_plan(plan: HopPlan, *, t0_ticks: int, tick_hz: int) -> CompiledPlan:
                 priming=(k == 0),
             )
         )
-    return CompiledPlan(plan=plan, t0_ticks=t0_ticks, tick_hz=tick_hz, slots=slots, edges=tuple(edges))
+    return CompiledPlan(
+        plan=plan, t0_ticks=t0_ticks, tick_hz=tick_hz, slots=slots, edges=tuple(edges)
+    )

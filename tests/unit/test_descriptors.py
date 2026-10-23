@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: MIT
 """Edges -> Tick GPIO_WRITE descriptors, checked against the Tick model, not by eye."""
+
 from __future__ import annotations
 
 import struct
@@ -22,8 +23,15 @@ MHZ = 1_000_000
 
 
 def compiled():
-    p = HopPlan(frequencies_hz=(2_410 * MHZ, 2_420 * MHZ), period_ticks=50_000, settle_ticks=2_000,
-                capture_ticks=10_000, pulse_ticks=1_000, lead_ticks=10_000, context_margin_ticks=100)
+    p = HopPlan(
+        frequencies_hz=(2_410 * MHZ, 2_420 * MHZ),
+        period_ticks=50_000,
+        settle_ticks=2_000,
+        capture_ticks=10_000,
+        pulse_ticks=1_000,
+        lead_ticks=10_000,
+        context_margin_ticks=100,
+    )
     return compile_plan(p, t0_ticks=0, tick_hz=TICK_HZ)
 
 
@@ -49,9 +57,20 @@ def test_edge_yields_rise_with_completion_and_fall_without():
 def test_pack_matches_the_48_byte_wire_contract():
     c = compiled()
     rise, _ = descriptors_for_edge(c.edges[0])
-    expected = struct.pack("<HHHHQII4I8x", 1, 48, CommandID.GPIO_WRITE, TargetFamily.GPIO,
-                           rise.timestamp_ticks, int(rise.flags), rise.sequence_id,
-                           0xF, gpio_value(c.edges[0].slot, True), 0, 0)
+    expected = struct.pack(
+        "<HHHHQII4I8x",
+        1,
+        48,
+        CommandID.GPIO_WRITE,
+        TargetFamily.GPIO,
+        rise.timestamp_ticks,
+        int(rise.flags),
+        rise.sequence_id,
+        0xF,
+        gpio_value(c.edges[0].slot, True),
+        0,
+        0,
+    )
     assert rise.pack() == expected
     assert CommandDescriptor.unpack(rise.pack()) == rise
     assert len(descriptor_csv(rise).split(",")) == 12
@@ -61,8 +80,14 @@ def test_replay_through_tick_model_drives_the_expected_gpio_waveform():
     c = compiled()
     model = AxiTimedCommandSchedulerModel(queue_depth=16, tick_hz=TICK_HZ)
     for d in descriptors_for_plan(c):
-        model.push_gpio(d.sequence_id, d.timestamp_ticks, d.args[0], d.args[1],
-                        late_policy="drop", report_completion=bool(d.flags & Flag.REPORT_COMPLETION))
+        model.push_gpio(
+            d.sequence_id,
+            d.timestamp_ticks,
+            d.args[0],
+            d.args[1],
+            late_policy="drop",
+            report_completion=bool(d.flags & Flag.REPORT_COMPLETION),
+        )
     seen_rises = []
     for e in c.edges:
         model.advance_to(e.rise_ticks - 1)
