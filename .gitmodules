@@ -1,0 +1,6 @@
+[submodule "third_party/tick"]
+	path = third_party/tick
+	url = https://github.com/tfcollins/tick
+[submodule "third_party/vrt49"]
+	path = third_party/vrt49
+	url = https://github.com/tfcollins/vrt49

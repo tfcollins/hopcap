@@ -1,0 +1,42 @@
+{
+  "schema": 1,
+  "note": "Fail-closed upstream pins. tick/vrt49 must equal the submodule HEADs; adi_hdl/corundum/linux/u_boot/atf must equal what vrt49's hdl-corundum.yml and ci/platform-artifacts.json build against at the pinned vrt49 revision.",
+  "tick": {
+    "repository": "https://github.com/tfcollins/tick",
+    "revision": "1b8a0c74b84517bd6f7f22b84b90ca87ca050dc8",
+    "why": "main; first commit with FPGA-local SPI, after REPEAT (#27) and repeat HIL (#28)"
+  },
+  "vrt49": {
+    "repository": "https://github.com/tfcollins/vrt49",
+    "revision": "eae8aa0aee16816f2657812101df42cfdcad7237",
+    "why": "tip of test/zu11eg-qsfp-hw (2026-10-22): AD9545 Q1B QSFP refclk fix, VRT49_PHYSICAL_PORT=qsfp, VRT49_CORUNDUM_BOOT=sd. Re-pin to the merge commit once it lands on main."
+  },
+  "adi_hdl": {
+    "repository": "https://github.com/analogdevicesinc/hdl.git",
+    "revision": "e57851ffcea3d92d821a38c908c909d61db4a492"
+  },
+  "corundum": {
+    "repository": "https://github.com/corundum/corundum.git",
+    "revision": "37f26075da8ad4361c196d2f43d6253b8470c6fa"
+  },
+  "linux": {
+    "repository": "https://github.com/analogdevicesinc/linux.git",
+    "revision": "2e8908932dfd9faf40ec9220a508aa1ce02699a8",
+    "kernel_release": "6.1.70-284114-g2e8908932dfd"
+  },
+  "arm_trusted_firmware": {
+    "repository": "https://github.com/Xilinx/arm-trusted-firmware.git",
+    "revision": "3c50744d6b5dc72a6108bd4f4f26fd3268fe8fae",
+    "xilinx_release": "2025.1"
+  },
+  "u_boot": {
+    "url": "https://swdownloads.analog.com/cse/boot_partition_files/uboot/2023_r2/u-boot_adi_zynqmp_adrv9009_zu11eg_adrv2crr_fmc.elf",
+    "sha256": "f5105999415806322ff52a9a7b37d813e0f6cf1fe8b6c08d042dc069e4f37893"
+  },
+  "labgrid_plugins": {
+    "repository": "https://github.com/tfcollins/labgrid-plugins",
+    "revision": "70d389a5b91ef48242791340c98ac84e5bb69b07",
+    "why": "same pin as vrt49 hw-test.yml so hopcap and vrt49 share one runner venv contract"
+  },
+  "vivado": "2025.1"
+}

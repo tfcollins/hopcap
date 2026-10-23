@@ -1,0 +1,45 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hopcap"
+version = "0.1.0"
+description = "ADRV9009-ZU11EG Tick-timed FHM hop with settled, gated VRT49 captures over QSFP"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+dependencies = ["numpy"]
+
+[project.scripts]
+hopcap = "hopcap.cli:main"
+
+[project.optional-dependencies]
+test = ["pytest>=8", "pyyaml"]
+hardware = ["pylibiio>=0.25"]
+lab = ["labgrid>=23.0"]
+docs = [
+    "sphinx>=7",
+    "sphinxcontrib-mermaid",
+    "myst-parser",
+    "adi-doctools @ https://github.com/analogdevicesinc/doctools/releases/download/latest/adi-doctools.tar.gz",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests/unit"]
+pythonpath = ["src", "third_party/tick/src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+extend-exclude = ["third_party", "hdl", "docs/_build"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
+ignore = ["E501", "B008"]
+
+[tool.ruff.format]
+quote-style = "double"
