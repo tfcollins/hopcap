@@ -4,9 +4,13 @@
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
 
 import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from fakes import FakeMmio
 
 from hopcap.hopctrl import (
     HopController,
@@ -19,56 +23,6 @@ from hopcap.plan import HopPlan, SlotTable, hz_to_q44_20
 ROOT = Path(__file__).resolve().parents[2]
 REGMAP = json.loads((ROOT / "hdl/hopctrl_regmap.json").read_text())
 MHZ = 1_000_000
-
-
-class FakeMmio:
-    """Register-level fake: RW registers store, RO registers are test-settable."""
-
-    def __init__(self, regs: HopCtrlRegs):
-        self.r = regs
-        self.mem: dict[int, int] = {
-            regs.ID: regs.id_word,
-            regs.VERSION: regs.version_word,
-            regs.SETTLE_TICKS: 0x7D0,
-            regs.SEQ_SLOT_COUNT: 8,
-        }
-        self.writes: list[tuple[int, int]] = []
-        self.state = 0
-        self.enabled = False
-        self.idle_open = True
-        self.slot_source = False
-        self.superseded_sticky = False
-        self.drain_timeout_sticky = False
-
-    def read32(self, off: int) -> int:
-        if off == self.r.CTRL_STATUS:
-            gate = (
-                1
-                if (not self.enabled or (self.state == 0 and self.idle_open) or self.state == 4)
-                else 0
-            )
-            return (
-                self.state
-                | gate << 3
-                | self.superseded_sticky << 4
-                | self.drain_timeout_sticky << 5
-                | self.enabled << 8
-                | self.slot_source << 9
-                | self.idle_open << 11
-            )
-        return self.mem.get(off, 0)
-
-    def write32(self, off: int, value: int) -> None:
-        self.writes.append((off, value))
-        if off == self.r.CTRL_STATUS:
-            self.enabled = bool(value & 1)
-            self.slot_source = bool(value & 2)
-            self.idle_open = bool(value & 8)
-            if value & 4:
-                self.superseded_sticky = self.drain_timeout_sticky = False
-                self.mem[self.r.SUPERSEDED_COUNT] = 0
-            return
-        self.mem[off] = value
 
 
 @pytest.fixture
