@@ -445,3 +445,44 @@ async def disable_mid_flight_returns_idle_and_opens_gate(dut):
     assert dut.stream_enable.value == 1
     assert dut.fabric_context_valid.value == 0
     await Timer(1, units="ns")
+
+
+@cocotb.test()
+async def event_in_the_same_cycle_as_the_handshake_republishes(dut):
+    """Review finding #3: an event that lands in the exact cycle the framer takes the tuple
+    (valid&ready) must be treated like one after the handshake: the in-flight Context is stale,
+    so after `accepted` the controller must run DRAIN/SETTLE/PUBLISH again, never open."""
+    await reset(dut)
+    await arm(dut, settle=2, capture=0, slots={2: F2, 5: F5})
+    await rise(dut, 2)
+    await wait_state(dut, STATE["PUBLISH"])
+    await fall(dut)                          # trigger low so the next write is a real rising edge
+    await ReadOnly()
+    assert dut.fabric_context_valid.value == 1
+    await Timer(1, units="ns")
+    # Same cycle: framer ready AND a new rising edge (slot 5).
+    dut.fabric_context_ready.value = 1
+    dut.scheduler_gpio.value = (5 << 1) | 1
+    await tick(dut)
+    dut.fabric_context_ready.value = 0
+    await ReadOnly()
+    assert dut.fabric_context_valid.value == 0, "handshake consumed valid"
+    await Timer(1, units="ns")
+    await tick(dut, 3)
+    dut.fabric_context_accepted.value = 1
+    await tick(dut)
+    dut.fabric_context_accepted.value = 0
+    for _ in range(60):
+        await ReadOnly()
+        assert dut.stream_enable.value == 0, "gate opened under a stale Context"
+        if int(dut.state_out.value) == STATE["PUBLISH"] and dut.fabric_context_valid.value:
+            break
+        await RisingEdge(dut.clk)
+    else:
+        raise AssertionError("second PUBLISH never reached")
+    assert int(dut.fabric_rf_frequency_q44_20.value) == F5
+    assert int(dut.fabric_hop_epoch.value) == 2
+    await Timer(1, units="ns")
+    await framer_accepts_context(dut)
+    await wait_state(dut, STATE["OPEN"])
+    assert await axi_read(dut, REG["SUPERSEDED_COUNT"]) == 1

@@ -18,12 +18,15 @@ set hop_ctrl_base 0x84AC0000
 # the constants system_bd_vrt49.tcl ties them to (same net-deletion pattern that file
 # uses for axi_tx_fifo).
 if {![info exists ad_project_params(VRT_FABRIC_HOP_ENABLE)] || !$ad_project_params(VRT_FABRIC_HOP_ENABLE)} {
+  # vrt49_zero_32/vrt49_zero_64 also feed the framer's PTP inputs, so only detach our pins
+  # from the shared constant nets (never delete the nets themselves).
   foreach pin {fabric_sample_enable fabric_context_valid fabric_rf_frequency_q44_20 fabric_hop_epoch} {
     set net [get_bd_nets -quiet -of_objects [get_bd_pins axi_vrt49_framer_0/$pin]]
     if {$net ne ""} {
-      delete_bd_objs $net
+      disconnect_bd_net $net [get_bd_pins axi_vrt49_framer_0/$pin]
     }
   }
+  # vrt49_one_1's only sink was fabric_sample_enable; remove the now-dangling constant.
   if {[llength [get_bd_cells -quiet vrt49_one_1]]} {
     delete_bd_objs [get_bd_cells vrt49_one_1]
   }

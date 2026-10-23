@@ -67,8 +67,8 @@ def test_program_writes_slots_settle_capture_then_enables(regs):
     # CTRL written last, with enable + idle_open, and the stickies cleared
     last_off, last_val = m.writes[-1]
     assert last_off == regs.CTRL_STATUS
-    assert last_val & 0b1 and last_val & 0b1000 and last_val & 0b100
-    assert m.enabled and m.idle_open and not m.slot_source
+    assert last_val & 0b1 and last_val & 0b100 and not last_val & 0b1000
+    assert m.enabled and not m.idle_open and not m.slot_source
 
 
 def test_status_decodes_fields(regs):

@@ -342,12 +342,15 @@ module vrt49_fhm_hop_ctrl #(
                             superseded_sticky <= 1'b1;
                             if (superseded_count != 32'hffffffff)
                                 superseded_count <= superseded_count + 32'd1;
-                            if (published) pending <= 1'b1;
+                            // "Published" includes the handshake happening this very cycle:
+                            // the framer has latched the OLD tuple, so a rerun is needed.
+                            if (published || (fabric_context_valid && fabric_context_ready))
+                                pending <= 1'b1;
                         end
                         if (fabric_context_accepted) begin
                             fabric_context_valid <= 1'b0;
                             published <= 1'b0;
-                            if (pending || (event_edge && published)) begin
+                            if (pending || (event_edge && (published || (fabric_context_valid && fabric_context_ready)))) begin
                                 pending <= 1'b0;
                                 drain_elapsed <= 32'd0;
                                 state <= DRAIN;

@@ -11,6 +11,7 @@ from __future__ import annotations
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from dataclasses import replace as _replace
 from pathlib import Path
 from typing import Any
 
@@ -147,29 +148,48 @@ def run_live(cfg: RunConfig, c: Components) -> RunReport:
         f"hop controller {hc_id} v0x{hc_version:08x}; tick {tick_info['time_tick_hz']} Hz depth {tick_info['queue_depth']}"
     )
 
-    # 2. program the fabric, open the receiver, arm the radio
-    slots = SlotTable.from_plan(cfg.plan)
-    hc.program(
-        cfg.plan,
-        slots,
-        sequence_mode=cfg.sequence_mode,
-        drain_timeout_ticks=cfg.hopctrl_drain_timeout_ticks,
-    )
-    framer_mod.configure(c.framer, cfg.framer)
-    c.receiver.start()
-    tick.park_trigger_low(lead_ticks=max(1, tick_info["time_tick_hz"] // 100))
-    c.stager.enable()
-    hc.require_idle()
+    # Transport latency: one Tick attribute round trip in ticks.  Every submit/stage/poll costs
+    # about one of these, so the lead must cover setup and the period must cover staging.
+    n0 = tick.now()
+    n1 = tick.now()
+    rtt = max(1, n1 - n0)
+    lookahead = max(1, min(cfg.lookahead_hops, (tick_info["queue_depth"] - 1) // 2))
+    setup_calls = 2 * lookahead + 6
+    lead = max(cfg.plan.lead_ticks, setup_calls * rtt * 2)
+    staging_floor = 6 * rtt  # stage write + readback + completion polls, with margin
+    plan = cfg.plan if lead == cfg.plan.lead_ticks else _replace(cfg.plan, lead_ticks=lead)
+    log(f"transport rtt ~{rtt} ticks; lead {lead} ticks; staging floor {staging_floor} ticks")
 
-    # 3. compile against the live clock only now, so lead_ticks is not eaten by setup
-    t0 = tick.now()
-    compiled = compile_plan(cfg.plan, t0_ticks=t0, tick_hz=tick_info["time_tick_hz"])
-    if c.on_compiled:
-        c.on_compiled(compiled)
-    log(f"plan {cfg.plan.name}: {len(compiled.edges)} edges from t0={t0}, {len(slots)} slots")
-
-    # 4. hop
+    # 2. program the fabric, open the receiver, arm the radio (gate stays shut until edge 0)
+    slots = SlotTable.from_plan(plan)
+    receiver_started = False
+    stager_enabled = False
+    edges = None
     try:
+        hc.program(
+            plan,
+            slots,
+            sequence_mode=cfg.sequence_mode,
+            drain_timeout_ticks=cfg.hopctrl_drain_timeout_ticks,
+        )
+        framer_mod.configure(c.framer, cfg.framer)
+        c.receiver.start()
+        receiver_started = True
+        tick.park_trigger_low(lead_ticks=max(1, tick_info["time_tick_hz"] // 100))
+        c.stager.enable()
+        stager_enabled = True
+        hc.require_idle()
+
+        # 3. compile against the live clock only now, so the lead is not eaten by setup
+        t0 = tick.now()
+        compiled = compile_plan(
+            plan, t0_ticks=t0, tick_hz=tick_info["time_tick_hz"], min_period_ticks=staging_floor
+        )
+        if c.on_compiled:
+            c.on_compiled(compiled)
+        log(f"plan {plan.name}: {len(compiled.edges)} edges from t0={t0}, {len(slots)} slots")
+
+        # 4. hop
         edges = tick.run(
             compiled,
             c.stager,
@@ -178,15 +198,32 @@ def run_live(cfg: RunConfig, c: Components) -> RunReport:
             stage_guard_ticks=cfg.stage_guard_ticks,
         )
     finally:
-        c.stager.disable()
+        # Teardown order matters: stop the stream (framer) BEFORE stopping the receiver, which
+        # waits for the socket to go idle; the hop controller is released last.
+        if stager_enabled:
+            try:
+                c.stager.disable()
+            except Exception as exc:
+                log(f"warning: FHM disable failed: {exc}")
+        if edges is None:
+            # failure path: leave the board quiet and the port free
+            for step in (
+                lambda: framer_mod.disable(c.framer),
+                (lambda: c.receiver.stop()) if receiver_started else (lambda: None),
+                hc.disable,
+            ):
+                try:
+                    step()
+                except Exception as exc:
+                    log(f"warning: cleanup step failed: {exc}")
 
     # 5. drain and collect
     executed = sum(1 for e in edges if e.executed)
     hc_after = hc.wait_drained(expected_events=hc_before.epoch + executed, sleep=c.sleep)
-    hc.disable()
-    rx_summary = c.receiver.stop()
     framer_mod.disable(c.framer)
     framer_after = framer_mod.counters(c.framer)
+    rx_summary = c.receiver.stop()
+    hc.disable()
     host_after = c.host_counters() if c.host_counters else {}
     tick_after = {
         "late_count": c.tick_read("late_count"),
@@ -218,6 +255,9 @@ def run_live(cfg: RunConfig, c: Components) -> RunReport:
         "tick": {
             **tick_info,
             "t0_ticks": t0,
+            "transport_rtt_ticks": rtt,
+            "lead_ticks": lead,
+            "staging_floor_ticks": staging_floor,
             "late_count_delta": tick_after["late_count"] - tick_info["late_count"],
             "overflow_count_delta": tick_after["overflow_count"] - tick_info["overflow_count"],
         },

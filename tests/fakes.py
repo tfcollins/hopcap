@@ -80,16 +80,18 @@ class FakeStager:
         self.p = pipeline
         self.staged: list[int] = []
         self.pll = pipeline.init_hz
+        self.enabled = False
 
     def enable(self):
-        pass
+        self.enabled = True
 
     def disable(self):
-        pass
+        self.enabled = False
 
     def stage(self, hz):
+        # Deliberately does NOT touch the pipeline model: the real FhmStager does not either,
+        # so TickSession must advance the model itself (review finding #1).
         self.staged.append(hz)
-        self.p.stage(hz)
 
     def readback_hz(self):
         return self.pll

@@ -115,6 +115,7 @@ class TickSession:
         # Stage frequencies[0] before edge 0 fires, then keep one hop ahead.
         if edges[0].stage_before_hz is not None:
             stager.stage(edges[0].stage_before_hz)
+            pipeline.stage(edges[0].stage_before_hz)
         submit_up_to(lookahead - 1)
         for k, e in enumerate(edges):
             seq = RISE_SEQ_BASE + e.index
@@ -133,6 +134,7 @@ class TickSession:
             stage_late = False
             if k + 1 < len(edges) and edges[k + 1].stage_before_hz is not None:
                 stager.stage(edges[k + 1].stage_before_hz)
+                pipeline.stage(edges[k + 1].stage_before_hz)
                 if self.now() > edges[k + 1].rise_ticks - stage_guard_ticks:
                     stage_late = True
             if after_edge is not None:

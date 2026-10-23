@@ -115,6 +115,7 @@ class HopController:
         *,
         sequence_mode: bool = False,
         drain_timeout_ticks: int = 0,
+        idle_open: bool = False,
     ) -> None:
         """Write slot table, settle, capture, then enable with stickies cleared."""
         self.m.write32(self.r.CTRL_STATUS, CTRL_IDLE_OPEN)  # disable while reprogramming
@@ -126,7 +127,7 @@ class HopController:
         self.m.write32(self.r.DRAIN_TIMEOUT_TICKS, drain_timeout_ticks)
         self.m.write32(self.r.SEQ_SLOT_COUNT, max(1, len(slots)))
         self.m.write32(self.r.SEQ_INDEX, 0)
-        ctrl = CTRL_ENABLE | CTRL_IDLE_OPEN | CTRL_W1C_CLEAR
+        ctrl = CTRL_ENABLE | CTRL_W1C_CLEAR | (CTRL_IDLE_OPEN if idle_open else 0)
         if sequence_mode:
             ctrl |= CTRL_SLOT_SOURCE_SEQ
         self.m.write32(self.r.CTRL_STATUS, ctrl)

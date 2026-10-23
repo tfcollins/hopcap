@@ -57,11 +57,21 @@ class SshShell:
         return proc.stdout
 
 
-def upload_file(shell: Shell, local: Path, remote: str) -> None:
-    """base64 over the shell: works on a serial console as well as ssh."""
-    b64 = base64.b64encode(Path(local).read_bytes()).decode()
+def upload_file(shell: Shell, local: Path, remote: str, *, chunk: int = 256) -> None:
+    """base64 over the shell in <=256-char chunks with a sha256 check, so it survives a serial
+    console's 4095-byte line discipline as well as ssh (vrt49 _corundum_upload_file pattern)."""
+    import hashlib
+
+    data = Path(local).read_bytes()
+    b64 = base64.b64encode(data).decode()
+    staging = shlex.quote(remote + ".b64")
+    shell.run(f": > {staging}")
+    for i in range(0, len(b64), chunk):
+        shell.run(f"printf %s {b64[i : i + chunk]} >> {staging}")
+    digest = hashlib.sha256(data).hexdigest()
+    shell.run(f"base64 -d {staging} > {shlex.quote(remote)} && rm -f {staging}")
     shell.run(
-        f"printf %s {shlex.quote(b64)} | base64 -d > {shlex.quote(remote)} && chmod +x {shlex.quote(remote)}"
+        f"echo {shlex.quote(f'{digest}  {remote}')} | sha256sum -c - && chmod +x {shlex.quote(remote)}"
     )
 
 

@@ -82,6 +82,7 @@ class CaptureRecord:
     first_sample_ps: int | None
     last_sample_ps: int | None
     first_arrival_mono_ns: int | None
+    last_arrival_mono_ns: int | None
     packets: int
     samples: int
     expected_samples: int
@@ -216,10 +217,26 @@ def associate(
     tagged = [w for w in windows if w.context is not None]
     by_epoch = {w.context.hop_epoch: w for w in tagged}
     epochs_seen = sorted(by_epoch)
+    win_index = {id(w): i for i, w in enumerate(windows)}
+    claimed: set[int] = set()
+
+    def orphan_between(prev_tagged: Window | None, next_epoch: int) -> Window | None:
+        """The untagged window closest before the next hop's Context and after the previous hop's
+        window: never the pre-run idle stream, never another hop's data."""
+        lo = win_index[id(prev_tagged)] if prev_tagged is not None else -1
+        nxt = by_epoch.get(next_epoch)
+        hi = win_index[id(nxt)] if nxt is not None else len(windows)
+        candidates = [
+            w
+            for w in windows[lo + 1 : hi]
+            if w.context is None and w.packets and id(w) not in claimed
+        ]
+        return candidates[-1] if candidates else None
 
     hops: list[CaptureRecord] = []
     next_epoch = epoch_base + 1
     prev_epoch: int | None = None
+    prev_window: Window | None = None
     for e, edge in zip(compiled.edges, edges, strict=True):
         reasons: list[str] = []
         win: Window | None = None
@@ -252,10 +269,10 @@ def associate(
                 reasons.append("readback_mismatch")
         elif edge.executed and reasons == ["no_context"]:
             # An untagged window may still exist for this hop; account its data but never label it.
-            orphan = next((w for w in windows if w.context is None and w.packets), None)
+            orphan = orphan_between(prev_window, next_epoch)
             if orphan is not None:
                 win = orphan
-                windows.remove(orphan)
+                claimed.add(id(orphan))
         samples = win.samples if win else 0
         gaps = win.gaps if win else 0
         n_pkts = len(win.packets) if win else 0
@@ -278,6 +295,8 @@ def associate(
         if win and win.packets:
             lp = win.packets[-1][1]
             last_ps = lp.int_secs * PS + lp.frac_ps + (lp.payload_words - 1) * PS // sample_rate_hz
+        if win is not None:
+            prev_window = win
         hops.append(
             CaptureRecord(
                 index=e.index,
@@ -297,6 +316,7 @@ def associate(
                 first_sample_ps=win.first_sample_ps if win else None,
                 last_sample_ps=last_ps,
                 first_arrival_mono_ns=win.packets[0][0].mono_ns if (win and win.packets) else None,
+                last_arrival_mono_ns=win.packets[-1][0].mono_ns if (win and win.packets) else None,
                 packets=n_pkts,
                 samples=samples,
                 expected_samples=expected_samples,

@@ -57,6 +57,8 @@ def test_hop_capture_plan(board, components):
     man = report.manifest
     hops = man["hops"]
     # hard failures
+    assert man["disposition"] in ("ok", "incomplete"), man["disposition"]
+    assert not [h["index"] for h in hops if h["disposition"] == "invalid"], "invalid hops"
     assert man["tick"]["late_count_delta"] == 0 and man["tick"]["overflow_count_delta"] == 0
     for h in hops:
         assert h["tick_status"] == "EXECUTED", h

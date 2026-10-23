@@ -23,7 +23,7 @@ PS = 10**12
 
 def _iso_from_ps(ps: int) -> str:
     secs, frac = divmod(ps, PS)
-    base = _dt.datetime.fromtimestamp(secs, tz=_dt.UTC)
+    base = _dt.datetime.fromtimestamp(secs, tz=_dt.timezone.utc)
     return base.strftime("%Y-%m-%dT%H:%M:%S") + f".{frac // 10**3:09d}Z"
 
 
@@ -58,27 +58,25 @@ def write_bundle(
     (out_dir / "hops").mkdir(parents=True, exist_ok=True)
     records = list(records)
 
-    # Rebuild each hop's samples from the spool using the association's arrival windows.
+    # Rebuild each hop's samples from the spool: exactly the IF Data records that fall inside
+    # the association's arrival window [first_arrival, last_arrival], never trailing data.
     by_hop: dict[int, list[bytes]] = {h.index: [] for h in result.hops}
-    hop_by_ctx_mono = {
-        h.context_mono_ns: h.index for h in result.hops if h.context_mono_ns is not None
-    }
-    hop_by_first_arrival = {
-        h.first_arrival_mono_ns: h.index for h in result.hops if h.first_arrival_mono_ns is not None
-    }
-    current: int | None = None
+    spans = [
+        (h.index, h.first_arrival_mono_ns, h.last_arrival_mono_ns)
+        for h in result.hops
+        if h.first_arrival_mono_ns is not None and h.last_arrival_mono_ns is not None
+    ]
     for rec in records:
         try:
             pkt = vrt.parse(rec.data)
         except vrt.VrtError:
             continue
         if isinstance(pkt, vrt.Context):
-            current = hop_by_ctx_mono.get(rec.mono_ns)
             continue
-        if rec.mono_ns in hop_by_first_arrival:
-            current = hop_by_first_arrival[rec.mono_ns]
-        if current is not None:
-            by_hop[current].append(rec.data)
+        for idx, lo, hi in spans:
+            if lo <= rec.mono_ns <= hi:
+                by_hop[idx].append(rec.data)
+                break
     iq = _hop_iq(by_hop)
 
     # SigMF: complete + tagged hops only, concatenated in plan order.
@@ -134,7 +132,7 @@ def write_bundle(
     plan = compiled.plan
     manifest = {
         "schema": MANIFEST_SCHEMA,
-        "generated_utc": _dt.datetime.now(tz=_dt.UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "generated_utc": _dt.datetime.now(tz=_dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "plan": {
             **asdict(plan),
             "frequencies_hz": list(plan.frequencies_hz),

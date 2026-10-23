@@ -152,7 +152,11 @@ class FhmPipelineModel:
         return self.expected_hz
 
 
-def compile_plan(plan: HopPlan, *, t0_ticks: int, tick_hz: int) -> CompiledPlan:
+def compile_plan(
+    plan: HopPlan, *, t0_ticks: int, tick_hz: int, min_period_ticks: int = 0
+) -> CompiledPlan:
+    """``min_period_ticks`` is the host staging floor: the period must leave room for the
+    software ``frequency_hopping_mode`` write (plus readback) between edges."""
     lo, hi = plan.band_hz
     for f in (*plan.frequencies_hz, plan.init_frequency_hz):
         if not lo <= f <= hi:
@@ -169,6 +173,11 @@ def compile_plan(plan: HopPlan, *, t0_ticks: int, tick_hz: int) -> CompiledPlan:
         raise PlanError(
             f"period_ticks {plan.period_ticks} must exceed settle + capture + pulse + context "
             f"margin = {busy}"
+        )
+    if plan.period_ticks < min_period_ticks:
+        raise PlanError(
+            f"period_ticks {plan.period_ticks} is below the host staging floor {min_period_ticks} "
+            "(hard-timed edge, soft-timed staging: the host cannot stage the next frequency in time)"
         )
     slots = SlotTable.from_plan(plan)
     edges: list[Edge] = []

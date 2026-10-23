@@ -173,11 +173,15 @@ class CReceiver:
         if self.proc.poll() is None:
             self.proc.send_signal(signal.SIGTERM)
         try:
-            out = self.proc.stdout.read() if self.proc.stdout else ""
-            self.proc.wait(timeout=timeout_s)
+            out, _ = self.proc.communicate(
+                timeout=timeout_s
+            )  # stderr is drained by the reader thread
         except subprocess.TimeoutExpired as exc:
             self.proc.kill()
-            raise ReceiverError("udp_spool did not exit after SIGTERM") from exc
+            self.proc.communicate(timeout=2)
+            raise ReceiverError(
+                "udp_spool did not exit after SIGTERM (is the framer still streaming?)"
+            ) from exc
         if self._reader is not None:
             self._reader.join(timeout=2.0)
         while True:
