@@ -21,11 +21,18 @@ advanced on hardware; teardown deadlock while the framer floods) and seven Impor
 fixed in commit 25f83a4 with red→green tests (125 unit, 19 cocotb). Deferred minors are listed in
 the ledger (`.superpowers/sdd/.../progress.md`, lines `Final: minor (deferred)`).
 
+## Bitstream attempt 2 (2026-10-23, hdl-dev-2, Vivado 2025.1) — BUILT, timing met
+`evidence/bitstream-attempt2/` (local, gitignored): `verify_evidence.py bitstream` OK. 1 h 23 min.
+Routed WNS +0.057 ns, WHS +0.010 ns, 0 failing endpoints; `check_hop_netlist` OK (controller, Tick and
+framer instantiated, fabric nets present, `adrv9009_gpio_00_a = tick_fhm_gpio[0]`).
+bitstream sha256 `fdfa3e783e750ce632b63ea4e49a7852d21c7f42303243a5ee178625c5aa949e`.
+Caveat: built from the pre-review BD fragment (`delete_bd_objs` on the fabric nets, which also
+undrives the framer's legacy PTP inputs). Usable for bring-up; not release-grade.
+
 ## In flight
-- Vivado 2025.1 build on hdl-dev-2 (`/mnt/disk2/scratch/hopcap/ws-*`, `scripts/build_bitstream_remote.sh`).
-  **It was launched from the pre-review BD fragment (net deletion); rebuild from the fixed fragment
-  (`disconnect_bd_net`) before any hardware run.** `build/ws` is already re-assembled with it.
-  BOOT.BIN needs its XSA (`build_boot_artifacts.sh --xsa ...` on a Vivado host for xsct/bootgen).
+- Bitstream attempt 3 from the fixed fragment (`disconnect_bd_net`), hdl-dev-2.
+- Boot set on hdl-dev-2 from attempt 2's XSA (`/mnt/disk2/scratch/hopcap/boot-attempt1`): kernel with
+  Tick in-tree, Q1B QSFP DTB + overlays, BOOT.BIN via xsct/bootgen.
 
 ## Not done
 - No hardware run yet. Hard-fail table lives in `tests/hardware/test_hw_hopcap.py`.
