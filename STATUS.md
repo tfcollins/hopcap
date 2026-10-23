@@ -29,10 +29,17 @@ bitstream sha256 `fdfa3e783e750ce632b63ea4e49a7852d21c7f42303243a5ee178625c5aa94
 Caveat: built from the pre-review BD fragment (`delete_bd_objs` on the fabric nets, which also
 undrives the framer's legacy PTP inputs). Usable for bring-up; not release-grade.
 
+## Boot set from attempt 2 (2026-10-23, hdl-dev-2) — BUILT and VERIFIED
+`evidence/boot-attempt1-hdl-dev-2/` (local, gitignored; also `hdl-dev-2:/mnt/disk2/scratch/hopcap/boot-attempt1`):
+`verify_evidence.py boot` OK. BOOT.BIN (ATF 2025.1 + ADI u-boot + attempt-2 bitstream via xsct/bootgen),
+Image (ADI 2e89089 with Tick + vrt49 drivers in-tree), system.dtb (Q1B QSFP refclk, framer/deframer,
+Tick @0x86000000, hop ctrl @0x84AC0000), both overlays. 9/9 fdtget checks. SHA-256s in `SHA256SUMS`.
+This trio is what `VRT49_CORUNDUM_BOOT=sd` staging expects; it is ready for a tron bring-up session
+(bring-up only: the bitstream is attempt 2, pre-review fragment).
+
 ## In flight
-- Bitstream attempt 3 from the fixed fragment (`disconnect_bd_net`), hdl-dev-2.
-- Boot set on hdl-dev-2 from attempt 2's XSA (`/mnt/disk2/scratch/hopcap/boot-attempt1`): kernel with
-  Tick in-tree, Q1B QSFP DTB + overlays, BOOT.BIN via xsct/bootgen.
+- Bitstream attempt 3 from the fixed fragment (`disconnect_bd_net`), hdl-dev-2. When it lands,
+  rebuild the boot set from its XSA (`build_boot_artifacts.sh --xsa ...` on hdl-dev-2, ~10 min).
 
 ## Not done
 - No hardware run yet. Hard-fail table lives in `tests/hardware/test_hw_hopcap.py`.
