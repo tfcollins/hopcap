@@ -12,16 +12,17 @@ as vrt49's check-sfp-rx-netlist.py does) and the staged top-level, and fails clo
 from __future__ import annotations
 
 import argparse
-import re
 import sys
 from pathlib import Path
 
+# Plain substrings: Vivado names BD instances like system_vrt49_fhm_hop_ctrl_0_0, where a
+# regex word boundary would never match.
 REQUIRED_NETLIST = (
-    r"\bvrt49_fhm_hop_ctrl\b",
-    r"\baxi_timed_command_scheduler\b",
-    r"\baxi_vrt49_framer\b",
-    r"fabric_rf_frequency_q44_20",
-    r"fabric_context_accepted",
+    "vrt49_fhm_hop_ctrl",
+    "axi_timed_command_scheduler",
+    "axi_vrt49_framer",
+    "fabric_rf_frequency_q44_20",
+    "fabric_context_accepted",
 )
 REQUIRED_TOP = (
     "assign adrv9009_gpio_00_a = tick_fhm_gpio[0];",
@@ -36,9 +37,9 @@ def check(project_dir: Path, top: Path) -> list[str]:
     if not candidates:
         return [f"no synthesized system.v under {project_dir}"]
     netlist = candidates[0].read_text(errors="replace")
-    for pat in REQUIRED_NETLIST:
-        if not re.search(pat, netlist):
-            errors.append(f"netlist {candidates[0]} lacks {pat}")
+    for needle in REQUIRED_NETLIST:
+        if needle not in netlist:
+            errors.append(f"netlist {candidates[0]} lacks {needle}")
     text = top.read_text()
     for needle in REQUIRED_TOP:
         if needle not in text:

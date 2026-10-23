@@ -28,6 +28,14 @@ def test_passes_on_complete_tree(tmp_path):
     assert chn.check(proj, top) == []
 
 
+def test_matches_vivado_bd_instance_names(tmp_path):
+    bd = ("module system; system_vrt49_fhm_hop_ctrl_0_0 u0(); system_axi_timed_command_scheduler_0_0 u1(); "
+          "system_axi_vrt49_framer_0_0 u2(); wire vrt49_fhm_hop_ctrl_0_fabric_rf_frequency_q44_20; "
+          "wire axi_vrt49_framer_0_fabric_context_accepted; endmodule")
+    proj, top = _tree(tmp_path, bd, GOOD_TOP)
+    assert chn.check(proj, top) == []
+
+
 def test_fails_when_controller_missing_or_top_unpatched(tmp_path):
     proj, top = _tree(
         tmp_path, GOOD_NET.replace("vrt49_fhm_hop_ctrl u0();", ""), GOOD_TOP.replace("(60)", "(61)")
