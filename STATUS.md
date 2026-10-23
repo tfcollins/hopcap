@@ -37,9 +37,17 @@ Tick @0x86000000, hop ctrl @0x84AC0000), both overlays. 9/9 fdtget checks. SHA-2
 This trio is what `VRT49_CORUNDUM_BOOT=sd` staging expects; it is ready for a tron bring-up session
 (bring-up only: the bitstream is attempt 2, pre-review fragment).
 
+## Bitstream attempt 3 (2026-10-23, fixed fragment) — BUILT, timing met, release candidate
+`evidence/bitstream-attempt3/`: `verify_evidence.py bitstream` OK. Routed WNS 0.000 ns (met, zero slack),
+WHS +0.008 ns, 0 failing endpoints; `check_hop_netlist` OK. bitstream sha256
+`e77d095f6dc4fd6bd9ea7a418ef9cdf002e8cdaba5aaf5fc7a8c58265cdf2a51`. Vivado BD 41-759 warnings dropped
+from 5 unconnected framer pins (attempt 2, incl. `ptp_tai_seconds_in`/`ptp_sample_counter_in` — the
+review finding) to the 3 the stock vrt49 design already has (`capture_loss_count`, `tx_link_status`,
+`tx_throttled_frame_count`). Workspace `hdl-dev-2:/mnt/disk2/scratch/hopcap/ws-20261023T215508Z`.
+Note the zero-slack WNS: re-check timing on any RTL change.
+
 ## In flight
-- Bitstream attempt 3 from the fixed fragment (`disconnect_bd_net`), hdl-dev-2. When it lands,
-  rebuild the boot set from its XSA (`build_boot_artifacts.sh --xsa ...` on hdl-dev-2, ~10 min).
+- Boot set from attempt 3's XSA (`hdl-dev-2:/mnt/disk2/scratch/hopcap/boot-attempt3`).
 
 ## Not done
 - No hardware run yet. Hard-fail table lives in `tests/hardware/test_hw_hopcap.py`.
