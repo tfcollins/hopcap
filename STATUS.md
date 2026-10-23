@@ -46,8 +46,13 @@ review finding) to the 3 the stock vrt49 design already has (`capture_loss_count
 `tx_throttled_frame_count`). Workspace `hdl-dev-2:/mnt/disk2/scratch/hopcap/ws-20261023T215508Z`.
 Note the zero-slack WNS: re-check timing on any RTL change.
 
+## Boot set from attempt 3 — BUILT and VERIFIED (release candidate for the first tron run)
+`evidence/boot-attempt3-hdl-dev-2/` and `hdl-dev-2:/mnt/disk2/scratch/hopcap/boot-attempt3`:
+`verify_evidence.py boot` OK, 9/9 DTB checks. Serve this directory over HTTP for
+`VRT49_CORUNDUM_{BOOT_BIN,KERNEL,DTB}_URL/_SHA256` (hashes in its `SHA256SUMS`).
+
 ## In flight
-- Boot set from attempt 3's XSA (`hdl-dev-2:/mnt/disk2/scratch/hopcap/boot-attempt3`).
+- Nothing. Next step is a lab session on tron (see "Not done").
 
 ## Not done
 - No hardware run yet. Hard-fail table lives in `tests/hardware/test_hw_hopcap.py`.
