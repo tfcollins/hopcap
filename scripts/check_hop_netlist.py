@@ -32,7 +32,7 @@ REQUIRED_TOP = (
 
 def check(project_dir: Path, top: Path) -> list[str]:
     errors: list[str] = []
-    candidates = list(project_dir.glob("synth/system.v")) + list(project_dir.glob("**/system.v"))
+    candidates = sorted(project_dir.glob("**/synth/system.v")) or sorted(project_dir.glob("**/system.v"))
     if not candidates:
         return [f"no synthesized system.v under {project_dir}"]
     netlist = candidates[0].read_text(errors="replace")
