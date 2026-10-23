@@ -1,4 +1,4 @@
-# STATUS — 2026-10-23 — offline pipeline complete; first Vivado build in flight
+# STATUS — 2026-10-23 — offline pipeline complete and reviewed; first Vivado build in flight
 
 Plan: `docs/superpowers/specs/2026-10-23-hopcap-design.md`. Ledger of rulings in the commit history.
 
@@ -15,8 +15,16 @@ Plan: `docs/superpowers/specs/2026-10-23-hopcap-design.md`. Ledger of rulings in
 - Lab: tron boot/restore, nemo preflight, hardware suite (collects without a board), adi-lg launcher.
 - Docs (Sphinx -W), CI workflows (actionlint clean), DataX example page, HOSTS.md QSFP link.
 
+## Review (2026-10-23)
+Whole-branch review found two production-only defects the fakes masked (pipeline model never
+advanced on hardware; teardown deadlock while the framer floods) and seven Important items; all
+fixed in commit 25f83a4 with red→green tests (125 unit, 19 cocotb). Deferred minors are listed in
+the ledger (`.superpowers/sdd/.../progress.md`, lines `Final: minor (deferred)`).
+
 ## In flight
 - Vivado 2025.1 build on hdl-dev-2 (`/mnt/disk2/scratch/hopcap/ws-*`, `scripts/build_bitstream_remote.sh`).
+  **It was launched from the pre-review BD fragment (net deletion); rebuild from the fixed fragment
+  (`disconnect_bd_net`) before any hardware run.** `build/ws` is already re-assembled with it.
   BOOT.BIN needs its XSA (`build_boot_artifacts.sh --xsa ...` on a Vivado host for xsct/bootgen).
 
 ## Not done
