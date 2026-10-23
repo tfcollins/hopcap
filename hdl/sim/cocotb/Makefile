@@ -43,7 +43,6 @@ lint:
 	    -I$(VRT49_HDL)/axi_vrt49_framer \
 	    $(HDL)/sim/cocotb/fhm_hop_chain.v \
 	    $(HDL)/vrt49_fhm_hop_ctrl/vrt49_fhm_hop_ctrl.v \
-	    $(VRT49_HDL)/axi_vrt49_framer/axi_vrt49_framer_axi.v \
 	    $(VRT49_HDL)/axi_vrt49_framer/axi_vrt49_framer.v \
 	    $(VRT49_HDL)/vrt49_pack/vrt49_pack.v
 
@@ -63,7 +62,6 @@ MODULE   := test_fhm_hop_chain
 VERILOG_SOURCES := \
     $(HDL)/sim/cocotb/fhm_hop_chain.v \
     $(HDL)/vrt49_fhm_hop_ctrl/vrt49_fhm_hop_ctrl.v \
-    $(VRT49_HDL)/axi_vrt49_framer/axi_vrt49_framer_axi.v \
     $(VRT49_HDL)/axi_vrt49_framer/axi_vrt49_framer.v \
     $(VRT49_HDL)/vrt49_pack/vrt49_pack.v
 COMPILE_ARGS += -Wno-WIDTHEXPAND -Wno-WIDTHTRUNC
