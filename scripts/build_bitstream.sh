@@ -35,8 +35,11 @@ if [ -z "$settings" ]; then
   done
 fi
 test -n "$settings" -a -f "$settings" || { echo "Vivado 2025.1 settings64.sh not found; pass --vivado-settings" >&2; exit 2; }
+# Vivado's settings scripts reference unset variables (PYTHONPATH); relax -u around them.
+set +u
 # shellcheck disable=SC1090
 source "$settings"
+set -u
 vivado -version | head -1
 evidence=${evidence:-$here/evidence/bitstream-$(date -u +%Y%m%dT%H%M%SZ)}
 mkdir -p "$evidence"
