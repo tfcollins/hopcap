@@ -1,0 +1,2 @@
+self-hosted-runner:
+  labels: [vivado, hw-nemo, kernel-build]

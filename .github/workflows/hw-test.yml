@@ -1,0 +1,65 @@
+name: Hardware test (tron)
+
+on:
+  workflow_dispatch:
+    inputs:
+      boot_bin_url: { description: "BOOT.BIN URL", required: true, type: string }
+      boot_bin_sha256: { description: "BOOT.BIN SHA-256", required: true, type: string }
+      kernel_url: { description: "Image URL", required: true, type: string }
+      kernel_sha256: { description: "Image SHA-256", required: true, type: string }
+      dtb_url: { description: "system.dtb URL", required: true, type: string }
+      dtb_sha256: { description: "system.dtb SHA-256", required: true, type: string }
+      plan: { description: "plan JSON path", default: "examples/plans/band-2400-2500-4slot.json", type: string }
+  pull_request:
+    types: [labeled, synchronize]
+  schedule:
+    - cron: "0 9 * * *"   # offset from vrt49's nightly; both share nemo + tron
+
+permissions:
+  contents: read
+
+jobs:
+  preflight:
+    if: github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'hw-test')
+    runs-on: [self-hosted, hw-nemo]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Read-only lab preflight
+        run: PYTHONPATH=src python3 -m hopcap.lab.preflight
+
+  hardware:
+    needs: preflight
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: [self-hosted, hw-nemo]
+    timeout-minutes: 90
+    env:
+      VRT49_CORUNDUM_BOOT: sd
+      VRT49_PHYSICAL_PORT: qsfp
+      VRT49_CORUNDUM_BOOT_BIN_URL: ${{ inputs.boot_bin_url }}
+      VRT49_CORUNDUM_BOOT_BIN_SHA256: ${{ inputs.boot_bin_sha256 }}
+      VRT49_CORUNDUM_KERNEL_URL: ${{ inputs.kernel_url }}
+      VRT49_CORUNDUM_KERNEL_SHA256: ${{ inputs.kernel_sha256 }}
+      VRT49_CORUNDUM_DTB_URL: ${{ inputs.dtb_url }}
+      VRT49_CORUNDUM_DTB_SHA256: ${{ inputs.dtb_sha256 }}
+      HOPCAP_PLAN: ${{ inputs.plan }}
+      HOPCAP_OUT: ${{ github.workspace }}/evidence/run
+      HOPCAP_COMMIT: ${{ github.sha }}
+      HOPCAP_RX_INTERFACE: enp4s0f0np0
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Runner venv with pinned labgrid-plugins
+        run: |
+          uv venv .venv-hw
+          uv pip install --python .venv-hw/bin/python -e third_party/tick -e ".[test,hardware,lab]" \
+            "labgrid-plugins @ git+https://github.com/tfcollins/labgrid-plugins@$(cat labgrid-plugins.lock)"
+      - name: Run on tron through adi-lg
+        run: .venv-hw/bin/python examples/hardware/zu11eg_hopcap.py --run --junit evidence/junit-hopcap-tron.xml
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: hopcap-evidence-${{ github.run_id }}
+          path: evidence
