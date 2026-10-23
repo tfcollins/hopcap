@@ -61,7 +61,7 @@ def verify_bitstream(d: Path, *, release: bool = False) -> list[str]:
     _check_sums(d, errors, ("system_top.bit", "system_top.xsa", "MANIFEST.json"))
     summary = d / "summary.txt"
     if not summary.exists():
-        return errors + ["summary.txt missing"]
+        return [*errors, "summary.txt missing"]
     text = summary.read_text()
     if not re.search(r"Timing constraints are met", text):
         errors.append("timing check did not report 'Timing constraints are met'")
@@ -101,7 +101,7 @@ def verify_boot(d: Path) -> list[str]:
     )
     prov_path = d / "boot-provenance.json"
     if not prov_path.exists():
-        return errors + ["boot-provenance.json missing"]
+        return [*errors, "boot-provenance.json missing"]
     prov = json.loads(prov_path.read_text())
     if prov.get("platform") != "adrv9009-zu11eg-qsfp":
         errors.append(f"platform {prov.get('platform')!r} != adrv9009-zu11eg-qsfp")
@@ -132,7 +132,7 @@ def verify_run(d: Path) -> list[str]:
             errors.append(f"{name} sha256 mismatch")
     man_path = d / "manifest.json"
     if not man_path.exists():
-        return errors + ["manifest.json missing"]
+        return [*errors, "manifest.json missing"]
     man = json.loads(man_path.read_text())
     if man.get("schema") != "hopcap-manifest/v1":
         errors.append("manifest schema is not hopcap-manifest/v1")

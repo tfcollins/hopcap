@@ -279,20 +279,19 @@ def assemble(
 
     adi = Path(adi_hdl) if adi_hdl else build_root / "hdl"
     cor = Path(corundum) if corundum else build_root / "corundum"
-    if fetch:
-        if not dry_run:
-            fetch_pinned("adi_hdl", adi, pins)
-            fetch_pinned("corundum", cor, pins)
-            subprocess.run(
-                [
-                    "git",
-                    "-C",
-                    str(cor),
-                    "apply",
-                    str(adi / "library/corundum/patch_axis_xgmii_rx_64.patch"),
-                ],
-                check=False,
-            )
+    if fetch and not dry_run:
+        fetch_pinned("adi_hdl", adi, pins)
+        fetch_pinned("corundum", cor, pins)
+        subprocess.run(
+            [
+                "git",
+                "-C",
+                str(cor),
+                "apply",
+                str(adi / "library/corundum/patch_axis_xgmii_rx_64.patch"),
+            ],
+            check=False,
+        )
     for name, path in (("adi_hdl", adi), ("corundum", cor)):
         if not (path / ".git").exists():
             raise AssembleError(

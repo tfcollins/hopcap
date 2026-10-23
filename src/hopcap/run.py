@@ -55,6 +55,67 @@ class Components:
     log: Callable[[str], None] = print
 
 
+def build_components_from_board(
+    shell,
+    *,
+    board_ip: str,
+    out_dir: Path,
+    bind: str = "192.0.2.2:4991",
+    rx_interface: str = "enp4s0f0np0",
+    rx_cpu: int | None = None,
+    hopctrl_base: int = 0x84AC0000,
+    iio_uri: str | None = None,
+    receiver: str = "c",
+) -> Components:
+    """Wire the real transports: iio_attr for Tick/Talise, the on-target helper for MMIO and
+    framer sysfs over `shell`, and the C spooler on the host NIC."""
+    from hopcap.plan import FhmPipelineModel as _Pipeline
+    from hopcap.receiver import CReceiver, PyReceiver, host_rx_counters
+    from hopcap.talise import FhmStager
+    from hopcap.transport import (
+        HelperMmio,
+        HelperSysfs,
+        find_fhm_channel_cli,
+        find_iio_device_dir,
+        iio_channel_cli_io,
+        iio_device_cli_io,
+    )
+
+    uri = iio_uri or f"ip:{board_ip}"
+    mmio = HelperMmio(shell, base=hopctrl_base)
+    mmio.ensure_uploaded()
+    framer_dir = find_iio_device_dir(shell, "axi-vrt49-framer")
+    framer = HelperSysfs(shell, device_dir=framer_dir)
+    tick_read, tick_write = iio_device_cli_io(uri, "axi-timed-command-scheduler")
+    lo_chan = find_fhm_channel_cli(uri, "adrv9009-phy")
+    lo_read, lo_write = iio_channel_cli_io(uri, "adrv9009-phy", lo_chan, output=True)
+    stager = FhmStager(lo_read, lo_write)
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    host, port = bind.rsplit(":", 1)
+    spool = out_dir / "datagrams.spool"
+    rx = (
+        CReceiver(bind=(host, int(port)), spool_path=spool, cpu=rx_cpu)
+        if receiver == "c"
+        else PyReceiver(bind=(host, int(port)), spool_path=spool)
+    )
+    init_hz = int(str(lo_read("frequency_hopping_mode")).split()[-1] or 2_450_000_000)
+    comps = Components(
+        tick_read=tick_read,
+        tick_write=tick_write,
+        mmio=mmio,
+        framer=framer,
+        stager=stager,
+        receiver=rx,
+        pipeline=_Pipeline(init_hz=2_450_000_000),
+        host_counters=lambda: host_rx_counters(rx_interface),
+    )
+    comps.out_dir = out_dir  # type: ignore[attr-defined]
+    comps.lo_channel = lo_chan  # type: ignore[attr-defined]
+    comps.pll_at_connect_hz = init_hz  # type: ignore[attr-defined]
+    return comps
+
+
 @dataclass
 class RunReport:
     compiled: CompiledPlan
