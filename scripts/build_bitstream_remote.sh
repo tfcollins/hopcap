@@ -49,7 +49,7 @@ rsync -a "$here/third_party/vrt49/scripts/check-vivado-timing.py" "$here/third_p
 hopcap_sha=$(git -C "$here" rev-parse HEAD)
 ssh "$host" "cd '$rdir/hopcap' && git init -q . 2>/dev/null || true; git -C '$rdir/hopcap' -c user.email=hopcap@build -c user.name=hopcap commit -q --allow-empty -m 'hopcap $hopcap_sha' 2>/dev/null || true; cd '$rdir/hdl' && git init -q . 2>/dev/null; git -C '$rdir/hdl' -c user.email=h@b -c user.name=h commit -q --allow-empty -m 'adi $(git -C "$ws/hdl" rev-parse HEAD)' 2>/dev/null || true; cd '$rdir/corundum' && git init -q . 2>/dev/null; git -C '$rdir/corundum' -c user.email=h@b -c user.name=h commit -q --allow-empty -m 'corundum $(git -C "$ws/corundum" rev-parse HEAD)' 2>/dev/null || true"
 # One Vivado build per host at a time (same lock file convention as picard's HDL builds).
-ssh "$host" "cd '$rdir' && flock /tmp/hdl-builder.lock env HOPCAP_SOURCE_SHA='$hopcap_sha' bash hopcap/scripts/build_bitstream.sh $post_only --ws '$rdir' --vivado-settings '$settings' --evidence '$rdir/evidence'"
+ssh "$host" "cd '$rdir' && flock /tmp/hdl-builder.lock env HOPCAP_SOURCE_SHA='$hopcap_sha' ADI_HDL_SHA='$(git -C "$ws/hdl" rev-parse HEAD)' CORUNDUM_SHA='$(git -C "$ws/corundum" rev-parse HEAD)' bash hopcap/scripts/build_bitstream.sh $post_only --ws '$rdir' --vivado-settings '$settings' --evidence '$rdir/evidence'"
 mkdir -p "$evidence"
 rsync -a "$host:$rdir/evidence/" "$evidence/"
 echo "hopcap_source_sha=$hopcap_sha" >> "$evidence/summary.txt"

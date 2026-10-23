@@ -66,12 +66,12 @@ test -n "$bit" -a -n "$xsa" -a -n "$timing" || { echo "bitstream/xsa/timing repo
 { echo -n "check-sfp-rx-netlist: "; python3 "$here/third_party/vrt49/scripts/check-sfp-rx-netlist.py" "$netlist" 2>&1 || echo "(not applicable to the QSFP shell)"; } | tee -a "$evidence/summary.txt"
 python3 "$here/scripts/check_hop_netlist.py" "$hdl" 2>&1 | tee -a "$evidence/summary.txt"
 cp "$bit" "$xsa" "$timing" "$evidence/"
-grep -A3 "Design Timing Summary" "$timing" | tail -1 | awk '{print "wns_ns="$1" tns_failing="$3" whs_ns="$5}' | tee -a "$evidence/summary.txt"
+echo "timing_report=$(basename "$timing")" | tee -a "$evidence/summary.txt"
 cp "$ws/MANIFEST.json" "$evidence/"
 ( cd "$evidence" && sha256sum system_top.bit system_top.xsa MANIFEST.json > SHA256SUMS )
 {
-  echo "adi_hdl=$(git -C "$hdl" rev-parse HEAD)"
-  echo "corundum=$(git -C "$ws/corundum" rev-parse HEAD)"
+  echo "adi_hdl=${ADI_HDL_SHA:-$(git -C "$hdl" rev-parse HEAD)}"
+  echo "corundum=${CORUNDUM_SHA:-$(git -C "$ws/corundum" rev-parse HEAD)}"
   echo "hopcap=${HOPCAP_SOURCE_SHA:-$(git -C "$here" rev-parse HEAD)}"
   echo "bitstream_sha256=$(sha256sum "$evidence/system_top.bit" | cut -d' ' -f1)"
   echo "vivado=$(vivado -version | head -1)"
