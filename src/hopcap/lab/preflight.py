@@ -140,14 +140,13 @@ def preflight(*, labgrid_client: str | None = None, timeout: float = 15.0) -> di
     if iface:
         try:
             raw = subprocess.run(
-                ["ip", "-4", "-o", "addr", "show", "dev", iface],
-                capture_output=True,
-                text=True,
-                timeout=timeout,
+                ["ip", "-4", "-o", "addr", "show"], capture_output=True, text=True, timeout=timeout
             ).stdout
         except (OSError, subprocess.TimeoutExpired):
             raw = ""
-        sections["address"] = validate_receiver_address(raw, iface)
+        rp = Path(f"/proc/sys/net/ipv4/conf/{iface}/rp_filter")
+        rp_val = int(rp.read_text().strip()) if rp.exists() else None
+        sections["address"] = validate_receiver_address(raw, iface, rp_val)
     else:
         sections["address"] = {"ok": False, "reason": "no receiver interface"}
     lgc = labgrid_client or shutil.which("labgrid-client")
