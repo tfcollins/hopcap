@@ -139,6 +139,8 @@ def hardware_lock(timeout: float):
 
 
 def execute(args, junit: Path, request: list[str]) -> int:
+    venv_bin = str(Path(sys.executable).parent)
+    os.environ["PATH"] = venv_bin + os.pathsep + os.environ.get("PATH", "")
     for tool in ("adi-lg", "labgrid-client"):
         if shutil.which(tool) is None:
             raise ValueError(f"{tool} not found on PATH")
@@ -157,6 +159,10 @@ def execute(args, junit: Path, request: list[str]) -> int:
         if junit.exists():
             raise ValueError(f"refusing to overwrite {junit}")
         result = subprocess.run(request, env=env)
+        if not junit.exists():
+            raise ValueError(
+                f"adi-lg exited {result.returncode} without producing {junit}: reservation/boot failed before pytest ran"
+            )
         count = validate_junit(junit, NODES)
         out = Path(os.environ["HOPCAP_OUT"])
         ver = subprocess.run(

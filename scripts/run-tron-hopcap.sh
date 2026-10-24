@@ -68,5 +68,8 @@ if [ -n "$nm_qsfp" ]; then
   grep -q "192.0.2.2/24" "$out/receiver-nic.txt" || { echo "receiver address not set" >&2; exit 1; }
 fi
 cd "$here"
+# adi-lg and labgrid-client must come from the same environment as the pinned labgrid-plugins
+export PATH="$(cd "$(dirname "$(command -v "$py")")" && pwd):$PATH"
+command -v adi-lg labgrid-client | tee "$out/tools.txt"
 env | grep -E "^(VRT49_|HOPCAP_|LG_)" | sed -E 's/(SHA256=)(.{12}).*/\1\2…/' | tee "$out/run-env.txt"
 "$py" examples/hardware/zu11eg_hopcap.py --run --junit "$out/junit-hopcap-tron.xml" --wait "$wait_s" 2>&1 | tee "$out/launcher.log"
