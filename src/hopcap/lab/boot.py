@@ -245,7 +245,7 @@ class TronSession:
                         "sha256sum /boot/BOOT.BIN /boot/Image /boot/system.dtb"
                     )
                     self.log("restored: " + self.restored_sums)
-                except Exception as exc:  # noqa: BLE001
+                except Exception as exc:
                     self.restore_error = str(exc)
                     self.log(f"WARNING: restore failed: {exc}")
             elif self._sd_staged:
