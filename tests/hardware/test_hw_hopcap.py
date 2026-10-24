@@ -40,11 +40,11 @@ def test_udp_path_board_to_host(board, components):
     rx = components.receiver
     rx.start()
     try:
-        bind = f"{rx.bind[0]}:{rx.bind[1]}"
+        host, port = rx.bind
+        bind = f"{host}:{port}"
         board["shell"].run(
             'python3 -c "import socket; s=socket.socket(socket.AF_INET, socket.SOCK_DGRAM); '
-            "s.bind(('192.0.2.1', 4991)); [s.sendto(b'hopcap-probe', ('%s', %d)) for _ in range(20)]\""
-            % (rx.bind[0], rx.bind[1])
+            f"s.bind(('192.0.2.1', 4991)); [s.sendto(b'hopcap-probe', ('{host}', {port})) for _ in range(20)]\""
         )
         time.sleep(0.5)
     finally:
