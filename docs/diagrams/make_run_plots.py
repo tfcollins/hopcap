@@ -125,10 +125,10 @@ def plot_packets_per_hop(m: dict) -> None:
     fig, ax = plt.subplots(figsize=(7.2, 3.0))
     ax.bar(x, got, width=0.55, color=BLUE, label="IF Data packets spooled")
     ax.bar(x, lost, width=0.55, bottom=got + 4, color=GRAY, label=f"missing vs {expected} expected")
-    for i, (g, l) in enumerate(zip(got, lost, strict=True)):
+    for i, (g, miss) in enumerate(zip(got, lost, strict=True)):
         ax.text(i, g - 30, f"{g}", ha="center", va="top", color=SURFACE, fontsize=8)
-        if l:
-            ax.text(i, g + l + 14, f"-{l}", ha="center", va="bottom", color=TEXT2, fontsize=8)
+        if miss:
+            ax.text(i, g + miss + 14, f"-{miss}", ha="center", va="bottom", color=TEXT2, fontsize=8)
     ax.axhline(expected, color=TEXT2, lw=0.8)
     ax.text(
         len(hops) - 0.55,
