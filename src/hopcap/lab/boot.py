@@ -154,6 +154,9 @@ class TronSession:
         self.shell = None
         self._sd_staged = False
         self.stock_sums_before: str | None = None
+        self.staged_sums: str | None = None
+        self.restored_sums: str | None = None
+        self.restore_error: str | None = None
 
     def _new_target(self, *, exact_files: bool = False):
         import adi_lg_plugins.strategies.bootzynqmpjtag  # noqa: F401
@@ -224,6 +227,7 @@ class TronSession:
             self.target, self.strategy = self._new_target(exact_files=True)
             self.shell = self._boot()
             live = self._value("sha256sum " + " ".join(f"/boot/{n}" for n in self.a.staged_names()))
+            self.staged_sums = live
             for name, (_url, sha) in self.a.staged_names().items():
                 if sha not in live:
                     raise RuntimeError(
@@ -235,15 +239,35 @@ class TronSession:
         try:
             if self._sd_staged and self.shell is not None:
                 self.log("restoring stock /boot trio from " + CORUNDUM_SD_STOCK_DIR)
-                self._value(sd_restore_command(), timeout=120)
-                self.log(
-                    "restored: "
-                    + self._value("sha256sum /boot/BOOT.BIN /boot/Image /boot/system.dtb")
-                )
+                try:
+                    self._value(sd_restore_command(), timeout=120)
+                    self.restored_sums = self._value(
+                        "sha256sum /boot/BOOT.BIN /boot/Image /boot/system.dtb"
+                    )
+                    self.log("restored: " + self.restored_sums)
+                except Exception as exc:  # noqa: BLE001
+                    self.restore_error = str(exc)
+                    self.log(f"WARNING: restore failed: {exc}")
             elif self._sd_staged:
+                self.restore_error = "no shell available to restore staged files"
                 self.log("WARNING: SD files were staged but no shell is available to restore them")
         finally:
             if self.strategy is not None:
                 self._power_off()
             if self.target is not None:
                 self.target.cleanup()
+
+
+def session_record(session: TronSession) -> dict:
+    """Durable record of what the session did to the card (written by the test fixture)."""
+    return {
+        "mode": session.a.mode,
+        "staged": {k: {"url": v[0], "sha256": v[1]} for k, v in session.a.staged_names().items()},
+        "stock_sums_before": session.stock_sums_before,
+        "staged_sums_live": session.staged_sums,
+        "restored_sums": session.restored_sums,
+        "restore_error": session.restore_error,
+        "restored_matches_stock": (session.restored_sums == session.stock_sums_before)
+        if (session.restored_sums and session.stock_sums_before)
+        else None,
+    }

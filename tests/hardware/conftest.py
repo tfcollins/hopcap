@@ -46,6 +46,15 @@ def board():
     finally:
         # Runs on any failure (including a failed exact boot): restore the stock /boot trio, power off.
         session.restore_and_power_off()
+        import json
+
+        from hopcap.lab.boot import session_record
+
+        out = Path(os.environ.get("HOPCAP_OUT", "."))
+        out.mkdir(parents=True, exist_ok=True)
+        (out / "board-session.json").write_text(
+            json.dumps(session_record(session), indent=2) + "\n"
+        )
 
 
 @pytest.fixture(scope="session")
