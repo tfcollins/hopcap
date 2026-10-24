@@ -1,0 +1,11 @@
+{
+  "name": "band-2400-2500-4slot-slow",
+  "description": "Same four hops as band-2400-2500-4slot with a 200 ms period: fits the ~85 ms host staging floor measured with the per-call iio_attr transport on nemo (14 ms per IIO round trip, 2026-10-23).",
+  "frequencies_hz": [2410000000, 2440000000, 2470000000, 2490000000],
+  "sample_rate_hz": 245760000,
+  "period_us": 200000,
+  "settle_us": 200,
+  "capture_us": 1000,
+  "pulse_us": 10000,
+  "lead_us": 50000
+}
