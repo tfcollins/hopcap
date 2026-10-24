@@ -43,13 +43,17 @@ def test_receiver_interface_fails_closed_on_missing_mac_or_link_down(tmp_path):
     assert preflight.receiver_interface(root)["ok"] is False
 
 
-def test_address_check_requires_exact_cidr():
-    assert preflight.validate_receiver_address(
-        "2: enp4s0f0np0    inet 192.0.2.2/24 brd 192.0.2.255 scope global enp4s0f0np0\n",
-        "enp4s0f0np0",
-    )["ok"]
+def test_address_check_accepts_receiver_interface_or_weak_host_delivery():
+    on_rx = "5: enp4s0f0np0    inet 192.0.2.2/24 brd 192.0.2.255 scope global enp4s0f0np0\n"
+    assert preflight.validate_receiver_address(on_rx, "enp4s0f0np0", 2)["on_receiver_interface"]
+    other = "2: enp2s0    inet 192.0.2.2/24 brd 192.0.2.255 scope global enp2s0\n"
+    r = preflight.validate_receiver_address(other, "enp4s0f0np0", 2)
+    assert r["ok"] and not r["on_receiver_interface"] and "weak-host" in r["note"]
+    assert not preflight.validate_receiver_address(other, "enp4s0f0np0", 1)["ok"], (
+        "strict rp_filter would drop it"
+    )
     assert not preflight.validate_receiver_address(
-        "2: enp4s0f0np0    inet 10.0.0.5/22 brd ...\n", "enp4s0f0np0"
+        "2: enp2s0 inet 10.0.0.5/22 brd ...\n", "enp4s0f0np0", 2
     )["ok"]
 
 

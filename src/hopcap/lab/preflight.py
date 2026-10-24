@@ -53,9 +53,33 @@ def receiver_interface(root: Path = Path("/sys/class/net")) -> dict:
     }
 
 
-def validate_receiver_address(raw: str, interface: str) -> dict:
-    ok = bool(re.search(rf"\binet {re.escape(RECEIVER_IPV4)}\b.*\b{re.escape(interface)}\b", raw))
-    return {"ok": ok, "expected": RECEIVER_IPV4, "interface": interface}
+def validate_receiver_address(raw: str, interface: str, rp_filter: int | None = None) -> dict:
+    """192.0.2.2/24 must be a local address.  On the receiver interface is ideal; on another
+    interface (vrt49's SFP profile owns it when the QSFP profile cannot activate without carrier)
+    is acceptable under the weak host model as long as the receiver interface's rp_filter is not
+    strict (1): the kernel then delivers datagrams arriving on the QSFP port to a socket bound
+    to 192.0.2.2."""
+    on_receiver = bool(
+        re.search(rf"\binet {re.escape(RECEIVER_IPV4)}\b.*\b{re.escape(interface)}\b", raw)
+    )
+    anywhere = bool(re.search(rf"\binet {re.escape(RECEIVER_IPV4)}\b", raw))
+    strict = rp_filter == 1
+    ok = on_receiver or (anywhere and not strict)
+    return {
+        "ok": ok,
+        "expected": RECEIVER_IPV4,
+        "interface": interface,
+        "on_receiver_interface": on_receiver,
+        "address_present": anywhere,
+        "rp_filter": rp_filter,
+        "note": None
+        if on_receiver
+        else (
+            "weak-host delivery via another interface"
+            if ok
+            else "address missing or rp_filter strict"
+        ),
+    }
 
 
 def validate_place(raw: str) -> dict:
