@@ -13,38 +13,37 @@ missed 178 datagrams during the 8.4 Gb/s bursts. Nothing in the FPGA dropped. Se
 [dated report](reports/2026-10-23-tron-first-run.md).
 ```
 
-## What happens, in one picture
+## What happens, in two pictures
+
+**Control plane.** The host talks to three things: Tick (timed descriptors), the Talise PLL
+(staging the next frequency) and the hop controller (slot table, settle, capture length). Only
+Tick acts at an exact device-time tick, and its one GPIO edge drives both the radio and the
+controller.
 
 ```{mermaid}
 flowchart LR
-    subgraph HOST["nemo (host)"]
-        PLAN["hopcap plan<br/>hop table → slots, edges,<br/>Tick descriptors"]
-        SESS["TickSession<br/>submit rise/fall pairs,<br/>stage next frequency,<br/>read back PLL"]
-        RX["udp_spool (C)<br/>every datagram + arrival time"]
-        ASSOC["associate → SigMF + manifest<br/>Context ↔ capture, never guessed"]
-        PLAN --> SESS
-        RX --> ASSOC
-    end
-    subgraph PL["ZU11EG programmable logic (100 MHz sys_cpu_clk)"]
-        TICK["axi_timed_command_scheduler<br/>(Tick) @0x86000000"]
-        HOP["vrt49_fhm_hop_ctrl<br/>@0x84AC0000<br/>DRAIN→SETTLE→PUBLISH→OPEN"]
-        FRAMER["axi_vrt49_framer<br/>IF Data + Context<br/>(VITA 49.2)"]
-        UDP["vrt49_udp_tx → Corundum<br/>10GbE QSFP lane 0"]
-        TICK -- "gpio_out[3:1] slot" --> HOP
-        TICK -- "gpio_out[0] event" --> HOP
-        HOP -- "fabric_sample_enable<br/>fabric_context_valid<br/>rf_frequency_q44_20, hop_epoch" --> FRAMER
-        FRAMER --> UDP
-    end
-    subgraph RF["Talise A (ADRV9009)"]
-        PLL["RF PLL in FHM<br/>GPIO-trigger mode"]
-        ADC["RX ADC 245.76 MSPS"]
-    end
-    SESS -- "IIO: command_descriptor,<br/>frequency_hopping_mode" --> TICK
-    SESS -- "IIO (adrv9009-phy)" --> PLL
-    SESS -- "/dev/mem: slots, SETTLE,<br/>CAPTURE_TICKS" --> HOP
-    TICK -- "gpio_out[0] → TAL_GPIO_0" --> PLL
-    ADC -- "JESD204 → cpack → FIFO" --> FRAMER
-    UDP -- "UDP 192.0.2.1:4991 → 192.0.2.2" --> RX
+    HOST["hopcap on nemo"]
+    TICK["Tick scheduler<br/>0x86000000"]
+    PLL["Talise A RF PLL<br/>FHM GPIO-trigger mode"]
+    HOP["vrt49_fhm_hop_ctrl<br/>0x84AC0000"]
+    HOST -- "IIO: GPIO_WRITE descriptors" --> TICK
+    HOST -- "IIO: frequency_hopping_mode" --> PLL
+    HOST -- "/dev/mem: slots, SETTLE, CAPTURE" --> HOP
+    TICK -- "gpio_out[0] to TAL_GPIO_0" --> PLL
+    TICK -- "gpio_out[3:0]: event + slot" --> HOP
+```
+
+**Data plane.** Samples flow continuously from the ADC into the framer; the controller only
+gates the framer's admission and hands it the Context tuple. Everything after the framer is
+stock vrt49.
+
+```{mermaid}
+flowchart LR
+    ADC["RX ADC<br/>245.76 MSPS"] -- "JESD204, cpack, FIFO" --> FR["axi_vrt49_framer<br/>IF Data + Context"]
+    HOP["hop controller"] -- "sample_enable<br/>rf_frequency, hop_epoch" --> FR
+    FR --> UDP["vrt49_udp_tx<br/>Corundum QSFP lane 0"]
+    UDP -- "UDP 192.0.2.1:4991" --> RX["udp_spool on nemo"]
+    RX --> AS["associate<br/>SigMF + manifest"]
 ```
 
 Tick's `gpio_out[0]` is both the FHM trigger pin (the path Tick validated on this board) and the
@@ -56,26 +55,26 @@ the Context will carry.
 
 ```{mermaid}
 sequenceDiagram
-    participant H as host (TickSession)
+    participant H as host TickSession
     participant T as Tick
     participant P as Talise PLL
     participant C as hop controller
-    participant F as framer / UDP
-    H->>P: stage frequency_hopping_mode = f[k+1]
-    H->>T: GPIO_WRITE rise @ t_k (slot k), fall @ t_k + 10 ms
-    Note over T: waits for device time t_k
-    T->>P: TAL_GPIO_0 rising edge → PLL hops to f[k] (staged before edge k−1)
-    T->>C: scheduler_gpio = {slot k, 1}
-    C->>F: fabric_sample_enable = 0 (DRAIN)
-    F-->>C: fabric_samples_drained
-    Note over C: SETTLE_TICKS (200 µs in run 7)
-    C->>F: fabric_context_valid + slot word + epoch k+1
-    F-->>H: Context packet (CIF0 RF ref freq, CIF2 info source = epoch)
-    F-->>C: fabric_context_accepted (packet left)
-    C->>F: fabric_sample_enable = 1 (OPEN, CAPTURE_TICKS)
-    F-->>H: IF Data packets (683 × 360 samples for 1 ms)
-    C->>F: fabric_sample_enable = 0 (CLOSED)
-    T-->>H: completion (executed tick); H reads back the PLL
+    participant F as framer and UDP
+    H->>P: stage frequency_hopping_mode with f(k+1)
+    H->>T: GPIO_WRITE rise at t(k) with slot k, fall 10 ms later
+    Note over T: waits for device time t(k)
+    T->>P: TAL_GPIO_0 rising edge, PLL hops to f(k), staged before edge k-1
+    T->>C: scheduler_gpio carries slot k and the event bit
+    C->>F: sample_enable low (DRAIN)
+    F-->>C: samples_drained
+    Note over C: SETTLE_TICKS, 200 us in run 7
+    C->>F: context_valid with slot word and epoch k+1
+    F-->>H: Context packet, CIF0 RF frequency and CIF2 epoch
+    F-->>C: context_accepted, packet has left
+    C->>F: sample_enable high (OPEN for CAPTURE_TICKS)
+    F-->>H: IF Data packets, 683 x 360 samples for 1 ms
+    C->>F: sample_enable low (CLOSED)
+    T-->>H: completion with executed tick, host reads back the PLL
 ```
 
 The ordering guarantee the host relies on is enforced in hardware and proven in simulation
