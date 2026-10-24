@@ -41,5 +41,6 @@ hopcap plan --plan examples/plans/band-2400-2500-4slot.json --dry-run
 make -C hdl/sim/cocotb TOP=vrt49_fhm_hop_ctrl               # needs hdl/sim/.venv with cocotb 1.9
 ```
 
-Build and lab flow: `docs/how-to/build.md`, `docs/how-to/tron-nemo-runbook.md`. Design document:
+Start with `docs/example.md` (dataflow and sequence diagrams, state machine, and plots from the first
+tron run). Build and lab flow: `docs/how-to/build.md`, `docs/how-to/tron-nemo-runbook.md`. Design document:
 `docs/superpowers/specs/2026-10-23-hopcap-design.md`. `CLAUDE.md` has the command matrix and invariants.

@@ -5,7 +5,8 @@ from pathlib import Path
 project = "hopcap"
 author = "Travis F. Collins"
 release = "0.1.0"
-extensions = ["sphinx.ext.githubpages", "myst_parser", "adi_doctools"]
+extensions = ["sphinx.ext.githubpages", "myst_parser", "sphinxcontrib.mermaid", "adi_doctools"]
+mermaid_init_config = {"startOnLoad": False, "deterministicIds": True}
 needs_extensions = {"adi_doctools": "0.4.21"}
 html_theme = "cosmic"
 html_static_path = ["_static"]

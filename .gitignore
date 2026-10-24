@@ -18,3 +18,4 @@ evidence/
 .superpowers/
 .ignore
 docs/reference/_regmap_table.md
+docs/_static/run7/*.png

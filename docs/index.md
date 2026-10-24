@@ -23,6 +23,13 @@ open capture):
 
 ```{toctree}
 :maxdepth: 1
+:caption: The example
+
+example
+```
+
+```{toctree}
+:maxdepth: 1
 :caption: Tutorials
 
 tutorials/dry-run
