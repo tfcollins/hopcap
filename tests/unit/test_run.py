@@ -100,6 +100,18 @@ def test_run_live_produces_a_verified_bundle_with_every_hop_ok(tmp_path):
     assert stager.staged == list(plan.frequencies_hz)
     assert (tmp_path / "out" / "run.sigmf-meta").exists()
     assert json.loads((tmp_path / "out" / "manifest.json").read_text())["disposition"] == "ok"
+    # the bundle verifies after run_live's manifest amendments, and ignores operator files
+    import subprocess
+    import sys as _sys
+
+    (tmp_path / "out" / "launcher.log").write_text("operator log, keeps growing\n")
+    root = Path(__file__).resolve().parents[2]
+    r = subprocess.run(
+        [_sys.executable, str(root / "scripts/verify_evidence.py"), "run", str(tmp_path / "out")],
+        capture_output=True,
+        text=True,
+    )
+    assert r.returncode == 0, r.stdout + r.stderr
     # framer counters are taken before and after, and the framer was enabled for the run
     assert ("v49_enable", "1") in framer.writes
 

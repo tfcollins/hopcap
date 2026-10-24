@@ -168,10 +168,19 @@ def write_bundle(
     }
     (out_dir / "manifest.json").write_text(json.dumps(manifest, indent=2, default=str) + "\n")
 
-    sums = {
-        p.name if p.parent == out_dir else str(p.relative_to(out_dir)): _sha256(p)
-        for p in sorted(out_dir.rglob("*"))
-        if p.is_file() and p.name != "SHA256SUMS.json"
-    }
-    (out_dir / "SHA256SUMS.json").write_text(json.dumps(sums, indent=2) + "\n")
+    write_sums(out_dir)
     return out_dir
+
+
+BUNDLE_FILES = ("run.sigmf-data", "run.sigmf-meta", "manifest.json", "datagrams.spool")
+
+
+def write_sums(out_dir: Path) -> dict[str, str]:
+    """SHA256SUMS.json over the bundle's own outputs (hops/*.npy included). Operator files that
+    keep growing after the bundle is written (launcher.log, junit) are deliberately not listed."""
+    out_dir = Path(out_dir)
+    files = [out_dir / n for n in BUNDLE_FILES if (out_dir / n).exists()]
+    files += sorted((out_dir / "hops").glob("*.npy"))
+    sums = {str(p.relative_to(out_dir)): _sha256(p) for p in files}
+    (out_dir / "SHA256SUMS.json").write_text(json.dumps(sums, indent=2) + "\n")
+    return sums

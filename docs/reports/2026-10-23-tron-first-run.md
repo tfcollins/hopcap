@@ -59,8 +59,8 @@ resolved to 192.0.2.1), run4 (staging floor refused the 50 ms plan).
 - FPGA: 3420 packets forwarded, 0 dropped, 0 UDP errors (again exactly 5 × 684). Tick `late_count` Δ 0.
 - Host: 3242 datagrams spooled, `rx_missed_errors` Δ **178** on the XL710 ring (default ring 512) during the 8.4 Gb/s bursts — the two incomplete hops lost 90 and 88 packets each, all in the NIC. `Udp RcvbufErrors` Δ 0: the C spooler kept up; the ring did not.
 - Complete hops carry 683 packets = 245 880 samples for a 1 ms window: the framer finishes the partial last packet (+120 samples), inside the designed ±1-packet tolerance.
-- First real I/Q: `hops/hop_0002.npy`, 245 880 CI16 samples at 2440 MHz (RX unterminated: noise floor).
-- `verify_evidence.py run` OK; SigMF has three capture segments (the complete hops) tagged with their Context frequency.
+- First real I/Q: `hops/hop_0002.npy`, 245 880 CI16 samples at 2440 MHz; I/Q RMS ≈ 19.8k, peaks ±28k (what the ADC saw; RF input not characterised).
+- SigMF has five capture segments (complete and incomplete hops) tagged with their Context frequency; `verify_evidence.py run` flagged two stale hashes because the manifest and launcher log were amended after the checksum file was written — fixed (checksums rewritten after the final manifest, operator logs excluded).
 
 **Next:** NIC ring tuning on nemo (root: `ethtool -G enp4s0f0np0 rx 8160`, as in vrt49's QSFP
 qualification) should remove the ring loss; the receiver can also be pinned (`HOPCAP_RX_CPU`).

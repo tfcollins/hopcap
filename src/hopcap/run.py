@@ -287,6 +287,9 @@ def run_live(cfg: RunConfig, c: Components) -> RunReport:
     manifest = json.loads(manifest_path.read_text())
     manifest.update(extra)
     manifest_path.write_text(json.dumps(manifest, indent=2, default=str) + "\n")
+    from hopcap.export import write_sums
+
+    write_sums(out_dir)  # the manifest changed after write_bundle hashed it
     log(
         f"run {result.disposition}: {sum(h.complete for h in result.hops)}/{len(result.hops)} hops complete"
     )
