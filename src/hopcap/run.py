@@ -178,7 +178,7 @@ def run_live(cfg: RunConfig, c: Components) -> RunReport:
         framer_mod.configure(c.framer, cfg.framer)
         c.receiver.start()
         receiver_started = True
-        tick.park_trigger_low(lead_ticks=max(1, tick_info["time_tick_hz"] // 100))
+        tick.park_trigger_low(lead_ticks=max(tick_info["time_tick_hz"] // 100, 4 * rtt))
         c.stager.enable()
         stager_enabled = True
         hc.require_idle()

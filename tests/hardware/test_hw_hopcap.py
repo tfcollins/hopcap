@@ -32,6 +32,29 @@ def test_boot_and_identity(board, components):
     assert "axi-timed-command-scheduler" in board["shell"].run("cat /sys/bus/iio/devices/*/name")
 
 
+def test_udp_path_board_to_host(board, components):
+    """A probe datagram from the board's Corundum address to the receiver socket must arrive.
+    Isolates host-side delivery (NIC, rp_filter, firewall) from the FPGA stream."""
+    import time
+
+    rx = components.receiver
+    rx.start()
+    try:
+        bind = f"{rx.bind[0]}:{rx.bind[1]}"
+        board["shell"].run(
+            'python3 -c "import socket; s=socket.socket(socket.AF_INET, socket.SOCK_DGRAM); '
+            "s.bind(('192.0.2.1', 4991)); [s.sendto(b'hopcap-probe', ('%s', %d)) for _ in range(20)]\""
+            % (rx.bind[0], rx.bind[1])
+        )
+        time.sleep(0.5)
+    finally:
+        summary = rx.stop()
+    assert summary["spool_records"] >= 1, (
+        f"no probe datagram reached {bind}: check nemo `nstat -az | grep -E 'ReversePathFilter|UdpNoPorts'`, "
+        "rp_filter on the receiver NIC (needs 0 when 192.0.2.2 lives on another interface) and ufw"
+    )
+
+
 def test_hop_capture_plan(board, components):
     from hopcap.cli import load_plan
     from hopcap.run import RunConfig, run_live

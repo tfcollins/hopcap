@@ -54,17 +54,31 @@ def receiver_interface(root: Path = Path("/sys/class/net")) -> dict:
 
 
 def validate_receiver_address(raw: str, interface: str, rp_filter: int | None = None) -> dict:
-    """192.0.2.2/24 must be a local address.  On the receiver interface is ideal; on another
-    interface (vrt49's SFP profile owns it when the QSFP profile cannot activate without carrier)
-    is acceptable under the weak host model as long as the receiver interface's rp_filter is not
-    strict (1): the kernel then delivers datagrams arriving on the QSFP port to a socket bound
-    to 192.0.2.2."""
+    """192.0.2.2/24 must be deliverable to a socket from datagrams arriving on the receiver NIC.
+
+    Either the address sits on the receiver interface itself, or (weak host model) it sits on
+    another interface AND the receiver interface's rp_filter is 0.  Linux drops every packet
+    arriving on an interface that has *no* IPv4 address when rp_filter is non-zero, loose mode
+    included (fib_validate_source "last_resort"); measured on nemo 2026-10-23 as
+    TcpExtIPReversePathFilter == received packets.
+    """
     on_receiver = bool(
         re.search(rf"\binet {re.escape(RECEIVER_IPV4)}\b.*\b{re.escape(interface)}\b", raw)
     )
     anywhere = bool(re.search(rf"\binet {re.escape(RECEIVER_IPV4)}\b", raw))
-    strict = rp_filter == 1
-    ok = on_receiver or (anywhere and not strict)
+    ok = on_receiver or (anywhere and rp_filter == 0)
+    if on_receiver:
+        note = None
+    elif ok:
+        note = "weak-host delivery via another interface (receiver rp_filter is 0)"
+    elif anywhere:
+        note = (
+            f"{RECEIVER_IPV4} is on another interface and {interface} has rp_filter={rp_filter}: the kernel "
+            f"will drop every datagram arriving on {interface}. Fix (root): "
+            f"`sysctl -w net.ipv4.conf.{interface}.rp_filter=0` or `nmcli con up vrt49-qsfp` while the link is up"
+        )
+    else:
+        note = f"{RECEIVER_IPV4} is not configured on any interface"
     return {
         "ok": ok,
         "expected": RECEIVER_IPV4,
@@ -72,13 +86,7 @@ def validate_receiver_address(raw: str, interface: str, rp_filter: int | None = 
         "on_receiver_interface": on_receiver,
         "address_present": anywhere,
         "rp_filter": rp_filter,
-        "note": None
-        if on_receiver
-        else (
-            "weak-host delivery via another interface"
-            if ok
-            else "address missing or rp_filter strict"
-        ),
+        "note": note,
     }
 
 

@@ -27,6 +27,7 @@ COORDINATOR = "10.0.0.41:20408"
 LOCK = Path("/tmp/vrt49-corundum-hardware.lock")
 NODES = (
     "tests/hardware/test_hw_hopcap.py::test_boot_and_identity",
+    "tests/hardware/test_hw_hopcap.py::test_udp_path_board_to_host",
     "tests/hardware/test_hw_hopcap.py::test_hop_capture_plan",
     "tests/hardware/test_hw_hopcap.py::test_negative_no_edge_no_hop",
 )
