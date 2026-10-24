@@ -1,4 +1,4 @@
-# STATUS — 2026-10-23 — offline pipeline complete and reviewed; first Vivado build in flight
+# STATUS — 2026-10-23 — first silicon: Tick→FHM→hop controller→framer all verified on tron; host reception blocked by rp_filter
 
 Plan: `docs/superpowers/specs/2026-10-23-hopcap-design.md`. Ledger of rulings in the commit history.
 
@@ -53,6 +53,13 @@ Note the zero-slack WNS: re-check timing on any RTL change.
 
 ## In flight
 - Nothing. Next step is a lab session on tron (see "Not done").
+
+## First tron run (2026-10-23) — see docs/reports/2026-10-23-tron-first-run.md
+FPGA/radio chain fully working: 5/5 Tick edges at 0-tick skew, Talise readback exactly per the pipeline
+model, hop controller 5 events / 5 captures / 0 superseded, framer 3420 packets 0 drops. Host side:
+0 datagrams spooled — nemo dropped them in TcpExtIPReversePathFilter (XL710 address-less, rp_filter=2).
+**Needs root on nemo:** `sysctl -w net.ipv4.conf.enp4s0f0np0.rp_filter=0` (+ ufw allow 4991/udp on it),
+then rerun `scripts/run-tron-hopcap.sh … --plan examples/plans/band-2400-2500-4slot-slow.json`.
 
 ## Not done
 - No hardware run yet. Hard-fail table lives in `tests/hardware/test_hw_hopcap.py`.
