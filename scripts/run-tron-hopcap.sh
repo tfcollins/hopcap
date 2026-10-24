@@ -45,15 +45,27 @@ export HOPCAP_PLAN="$plan" HOPCAP_OUT="$out" HOPCAP_RX_INTERFACE="${HOPCAP_RX_IN
 export HOPCAP_COMMIT="$(git -C "$here" rev-parse HEAD)"
 export LG_COORDINATOR=10.0.0.41:20408 ADI_LG_COORDINATOR=10.0.0.41:20408
 mkdir -p "$out"
+# The XL710 has no carrier until the FPGA drives the QSFP lane (after the image under test
+# boots), and NetworkManager refuses to activate an ethernet profile without carrier.  Take the
+# SFP profile down (it owns the same 192.0.2.2), try the QSFP profile, and otherwise put the
+# address on the interface directly; both paths are undone on exit.
+addr_added=0
 restore_nm() {
+  if [ "$addr_added" = 1 ]; then sudo -n ip addr del 192.0.2.2/24 dev "$HOPCAP_RX_INTERFACE" >/dev/null 2>&1 || true; fi
   if [ -n "$nm_qsfp" ]; then nmcli con down "$nm_qsfp" >/dev/null 2>&1 || true; fi
   if [ -n "$nm_sfp" ]; then nmcli con up "$nm_sfp" >/dev/null 2>&1 || true; fi
 }
 if [ -n "$nm_qsfp" ]; then
   trap restore_nm EXIT
   [ -n "$nm_sfp" ] && nmcli con down "$nm_sfp" >/dev/null 2>&1 || true
-  nmcli con up "$nm_qsfp"
+  if ! nmcli con up "$nm_qsfp" >/dev/null 2>&1; then
+    echo "nmcli could not activate $nm_qsfp (no carrier yet); assigning 192.0.2.2/24 directly"
+    sudo -n ip link set "$HOPCAP_RX_INTERFACE" up
+    sudo -n ip addr replace 192.0.2.2/24 dev "$HOPCAP_RX_INTERFACE"
+    addr_added=1
+  fi
   ip -4 -o addr show dev "$HOPCAP_RX_INTERFACE" | tee "$out/receiver-nic.txt"
+  grep -q "192.0.2.2/24" "$out/receiver-nic.txt" || { echo "receiver address not set" >&2; exit 1; }
 fi
 cd "$here"
 env | grep -E "^(VRT49_|HOPCAP_|LG_)" | sed -E 's/(SHA256=)(.{12}).*/\1\2…/' | tee "$out/run-env.txt"
