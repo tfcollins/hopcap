@@ -29,12 +29,23 @@ def board():
 
     artifacts = BootArtifacts.from_env(os.environ)
     session = TronSession(artifacts)
-    shell = session.boot_exact()
-    board_ip = shell.run(
-        "ip -4 -o addr show scope global | awk '{print $4}' | cut -d/ -f1 | head -1"
-    ).strip()
-    yield {"session": session, "shell": shell, "ip": board_ip, "artifacts": artifacts}
-    session.restore_and_power_off()
+    try:
+        shell = session.boot_exact()
+        # Management address = the source the board uses to reach the lab LAN (nemo), never the
+        # 192.0.2.1 Corundum side.  HOPCAP_BOARD_IP overrides.
+        board_ip = (
+            os.environ.get("HOPCAP_BOARD_IP")
+            or shell.run(
+                "ip -4 route get 10.0.0.71 | sed -n 's/.*src \\([0-9.]*\\).*/\\1/p' | head -1"
+            ).strip()
+        )
+        assert board_ip and not board_ip.startswith("192.0.2."), (
+            f"bad board management IP {board_ip!r}"
+        )
+        yield {"session": session, "shell": shell, "ip": board_ip, "artifacts": artifacts}
+    finally:
+        # Runs on any failure (including a failed exact boot): restore the stock /boot trio, power off.
+        session.restore_and_power_off()
 
 
 @pytest.fixture(scope="session")

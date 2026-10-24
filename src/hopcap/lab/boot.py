@@ -234,7 +234,14 @@ class TronSession:
     def restore_and_power_off(self):
         try:
             if self._sd_staged and self.shell is not None:
+                self.log("restoring stock /boot trio from " + CORUNDUM_SD_STOCK_DIR)
                 self._value(sd_restore_command(), timeout=120)
+                self.log(
+                    "restored: "
+                    + self._value("sha256sum /boot/BOOT.BIN /boot/Image /boot/system.dtb")
+                )
+            elif self._sd_staged:
+                self.log("WARNING: SD files were staged but no shell is available to restore them")
         finally:
             if self.strategy is not None:
                 self._power_off()
