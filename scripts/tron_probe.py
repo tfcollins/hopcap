@@ -9,6 +9,7 @@ it proves the SD boot path works before any exact-artifact staging, and records 
   adi-lg request --part adrv9009zu11eg --carrier adrv2crr-fmc --mode reserve --wait 600 \
     --run 'python3 scripts/tron_probe.py --out probe.json'
 """
+
 from __future__ import annotations
 
 import argparse
@@ -18,7 +19,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
-from hopcap.lab.boot import BootArtifacts, TronSession  # noqa: E402
+from hopcap.lab.boot import BootArtifacts, TronSession
 
 
 def main() -> int:
@@ -50,7 +51,7 @@ def main() -> int:
         }.items():
             try:
                 report[key] = shell.run(cmd, timeout_s=60).strip()
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 report[key] = f"ERROR: {exc}"
     finally:
         if args.keep_powered:
