@@ -50,6 +50,7 @@ plt.rcParams.update(
         "legend.frameon": False,
         "lines.linewidth": 1.6,
         "svg.fonttype": "none",
+        "svg.hashsalt": "hopcap-run7",  # deterministic element ids: SVGs reproducible byte for byte
     }
 )
 
