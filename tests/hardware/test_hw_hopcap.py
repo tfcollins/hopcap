@@ -27,7 +27,7 @@ def test_boot_and_identity(board, components):
     sums = board["shell"].run("sha256sum /boot/BOOT.BIN /boot/Image /boot/system.dtb")
     for name, (_url, sha) in board["artifacts"].staged_names().items():
         assert sha in sums, f"{name} on /boot is not the staged artifact"
-    assert "axi-vrt49-framer" in board["shell"].run("cat /sys/bus/iio/devices/*/name")
+    assert "vrt49_framer" in board["shell"].run("cat /sys/bus/iio/devices/*/name")
     assert "adrv9009-phy" in board["shell"].run("cat /sys/bus/iio/devices/*/name")
     assert "axi-timed-command-scheduler" in board["shell"].run("cat /sys/bus/iio/devices/*/name")
 

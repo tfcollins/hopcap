@@ -23,6 +23,9 @@ from hopcap.plan import CompiledPlan, FhmPipelineModel, HopPlan, SlotTable, comp
 from hopcap.scheduler import TickSession
 from hopcap.spool import iter_records
 
+FRAMER_IIO_NAME = "vrt49_framer"  # iio-vrt49-buffer.c indio_dev->name (probe on tron 2026-10-23)
+TICK_IIO_NAME = "axi-timed-command-scheduler"
+
 
 @dataclass
 class RunConfig:
@@ -85,9 +88,9 @@ def build_components_from_board(
     uri = iio_uri or f"ip:{board_ip}"
     mmio = HelperMmio(shell, base=hopctrl_base)
     mmio.ensure_uploaded()
-    framer_dir = find_iio_device_dir(shell, "axi-vrt49-framer")
+    framer_dir = find_iio_device_dir(shell, FRAMER_IIO_NAME)
     framer = HelperSysfs(shell, device_dir=framer_dir)
-    tick_read, tick_write = iio_device_cli_io(uri, "axi-timed-command-scheduler")
+    tick_read, tick_write = iio_device_cli_io(uri, TICK_IIO_NAME)
     lo_chan = find_fhm_channel_cli(uri, "adrv9009-phy")
     lo_read, lo_write = iio_channel_cli_io(uri, "adrv9009-phy", lo_chan, output=True)
     stager = FhmStager(lo_read, lo_write)
