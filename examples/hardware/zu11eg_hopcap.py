@@ -145,13 +145,14 @@ def execute(args, junit: Path, request: list[str]) -> int:
     validate_environment(os.environ)
     require_env(os.environ)
     env = dict(os.environ, LG_COORDINATOR=COORDINATOR, ADI_LG_COORDINATOR=COORDINATOR)
+    # Preflight BEFORE taking the shared lock: it checks that the lock is free.
+    pre = subprocess.run(
+        [sys.executable, "-m", "hopcap.lab.preflight"], env=env, capture_output=True, text=True
+    )
+    print(pre.stdout)
+    if pre.returncode != 0:
+        raise ValueError("preflight failed")
     with hardware_lock(args.lock_timeout):
-        pre = subprocess.run(
-            [sys.executable, "-m", "hopcap.lab.preflight"], env=env, capture_output=True, text=True
-        )
-        print(pre.stdout)
-        if pre.returncode != 0:
-            raise ValueError("preflight failed")
         junit.parent.mkdir(parents=True, exist_ok=True)
         if junit.exists():
             raise ValueError(f"refusing to overwrite {junit}")
