@@ -1,4 +1,4 @@
-# STATUS — 2026-10-23 — first silicon: Tick→FHM→hop controller→framer all verified on tron; host reception blocked by rp_filter
+# STATUS — 2026-10-23 — END TO END on tron: Tick→FHM→hop controller→Context→QSFP→host captures tagged with hop frequency
 
 Plan: `docs/superpowers/specs/2026-10-23-hopcap-design.md`. Ledger of rulings in the commit history.
 
@@ -60,6 +60,12 @@ model, hop controller 5 events / 5 captures / 0 superseded, framer 3420 packets 
 0 datagrams spooled — nemo dropped them in TcpExtIPReversePathFilter (XL710 address-less, rp_filter=2).
 **Needs root on nemo:** `sysctl -w net.ipv4.conf.enp4s0f0np0.rp_filter=0` (+ ufw allow 4991/udp on it),
 then rerun `scripts/run-tron-hopcap.sh … --plan examples/plans/band-2400-2500-4slot-slow.json`.
+
+## Run 7 (2026-10-23) — end to end
+After `rp_filter=0`/ufw on nemo: 5/5 hops received with Context RF == Talise readback == planned,
+epochs 1..5, 0-tick skew, FPGA 0 drops; 3/5 captures complete, 2 short by ~90 packets each from XL710
+ring `rx_missed_errors` (178). Plan test fails only the ≥95 % completeness gate. Report:
+`docs/reports/2026-10-23-tron-first-run.md`. Next: `ethtool -G enp4s0f0np0 rx 8160` on nemo (root).
 
 ## Not done
 - No hardware run yet. Hard-fail table lives in `tests/hardware/test_hw_hopcap.py`.

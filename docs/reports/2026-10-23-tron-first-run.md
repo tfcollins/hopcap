@@ -40,3 +40,27 @@ stock trio restored afterwards (`board-session.json`: `restored_matches_stock: t
 copied to `hopcap/evidence/run5/` on picard. Earlier attempts in the same session: run1 (launcher
 checked the lock it had taken), run2 (system `adi-lg` could not see the place), run3 (board address
 resolved to 192.0.2.1), run4 (staging floor refused the 50 ms plan).
+
+## Run 7 — end to end (after `rp_filter=0` + ufw allow on nemo)
+
+`tests/hardware`: boot/identity **PASSED**, board→host UDP probe **PASSED**, negative control
+**PASSED**, hop/capture plan **FAILED only on the ≥95 % completeness gate** (3/5 hops complete).
+
+| Per hop | 0 (priming) | 1 | 2 | 3 | 4 |
+|---|---|---|---|---|---|
+| Context RF (MHz) == Talise readback == planned | 2450 | 2410 | 2440 | 2470 | 2490 |
+| epoch | 1 | 2 | 3 | 4 | 5 |
+| Tick skew (ticks) | 0 | 0 | 0 | 0 | 0 |
+| packets received / 683 | 683 | 593 | 683 | 595 | 683 |
+| samples (expected 245760 ± 360) | 245880 | 213480 | 245880 | 214200 | 245880 |
+| disposition | ok | incomplete | ok | incomplete | ok |
+
+- 5 Contexts received, each immediately before its capture; `epochs_seen` 1..5, no skips, no orphans, 0 malformed, single peer 192.0.2.1:4991.
+- FPGA: 3420 packets forwarded, 0 dropped, 0 UDP errors (again exactly 5 × 684). Tick `late_count` Δ 0.
+- Host: 3242 datagrams spooled, `rx_missed_errors` Δ **178** on the XL710 ring (default ring 512) during the 8.4 Gb/s bursts — the two incomplete hops lost 90 and 88 packets each, all in the NIC. `Udp RcvbufErrors` Δ 0: the C spooler kept up; the ring did not.
+- Complete hops carry 683 packets = 245 880 samples for a 1 ms window: the framer finishes the partial last packet (+120 samples), inside the designed ±1-packet tolerance.
+- First real I/Q: `hops/hop_0002.npy`, 245 880 CI16 samples at 2440 MHz (RX unterminated: noise floor).
+- `verify_evidence.py run` OK; SigMF has three capture segments (the complete hops) tagged with their Context frequency.
+
+**Next:** NIC ring tuning on nemo (root: `ethtool -G enp4s0f0np0 rx 8160`, as in vrt49's QSFP
+qualification) should remove the ring loss; the receiver can also be pinned (`HOPCAP_RX_CPU`).
