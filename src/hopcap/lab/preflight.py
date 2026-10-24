@@ -174,7 +174,30 @@ def preflight(*, labgrid_client: str | None = None, timeout: float = 15.0) -> di
         sections["place"] = {"ok": False, "reason": "labgrid-client not installed"}
     sections["lock"] = lock_state()
     sections["coordinator"] = coordinator_reachable()
+    if iface:
+        sections["nic_ring"] = nic_ring(iface)
     return summarize(sections)
+
+
+def nic_ring(interface: str, timeout: float = 5.0) -> dict:
+    """Report-only: the RX ring size. 512 (i40e default) lost ~90 of 683 packets per 8.4 Gb/s
+    burst on 2026-10-23; vrt49's QSFP qualification used 8160 (`ethtool -G <if> rx 8160`, root)."""
+    out = {"ok": True, "interface": interface, "rx_ring": None, "recommended": 8160}
+    try:
+        raw = subprocess.run(
+            ["ethtool", "-g", interface], capture_output=True, text=True, timeout=timeout
+        ).stdout
+        cur = raw.split("Current hardware settings:", 1)[-1]
+        m = re.search(r"^RX:\s+(\d+)", cur, re.M)
+        out["rx_ring"] = int(m.group(1)) if m else None
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+    out["note"] = (
+        None
+        if (out["rx_ring"] or 0) >= 4096
+        else "small RX ring: expect ring loss in full-rate bursts"
+    )
+    return out
 
 
 def main() -> int:
