@@ -26,6 +26,9 @@ jobs:
       - uses: actions/checkout@v4
         with:
           submodules: recursive
+          # tick and vrt49 are private: a PAT with read access to them must be stored as
+          # SUBMODULES_TOKEN, or those repos made public; github.token alone cannot clone them.
+          token: ${{ secrets.SUBMODULES_TOKEN || github.token }}
       - name: Read-only lab preflight
         run: PYTHONPATH=src python3 -m hopcap.lab.preflight
 
@@ -51,6 +54,9 @@ jobs:
       - uses: actions/checkout@v4
         with:
           submodules: recursive
+          # tick and vrt49 are private: a PAT with read access to them must be stored as
+          # SUBMODULES_TOKEN, or those repos made public; github.token alone cannot clone them.
+          token: ${{ secrets.SUBMODULES_TOKEN || github.token }}
       - name: Runner venv with pinned labgrid-plugins
         run: |
           uv venv .venv-hw
