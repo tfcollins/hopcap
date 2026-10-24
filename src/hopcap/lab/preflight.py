@@ -35,12 +35,15 @@ def receiver_interface(root: Path = Path("/sys/class/net")) -> dict:
         operstate = (
             (iface / "operstate").read_text().strip() if (iface / "operstate").exists() else None
         )
+        # Link state is reported, not gated: the QSFP carrier only exists while the FPGA drives
+        # it, i.e. after the board has booted the image under test.
         return {
-            "ok": driver == RECEIVER_DRIVER and operstate == "up",
+            "ok": driver == RECEIVER_DRIVER,
             "interface": iface.name,
             "mac": RECEIVER_MAC,
             "driver": driver,
             "operstate": operstate,
+            "link_up": operstate == "up",
         }
     return {
         "ok": False,

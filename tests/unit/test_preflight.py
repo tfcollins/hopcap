@@ -38,7 +38,9 @@ def test_receiver_interface_fails_closed_on_missing_mac_or_link_down(tmp_path):
     assert preflight.receiver_interface(root)["ok"] is False
     root = fake_net(tmp_path / "b", operstate="down")
     r = preflight.receiver_interface(root)
-    assert r["ok"] is False and r["interface"] == "enp4s0f0np0"
+    assert r["ok"] is True and r["link_up"] is False, "link down is reported, not gated"
+    root = fake_net(tmp_path / "c", driver="ixgbe")
+    assert preflight.receiver_interface(root)["ok"] is False
 
 
 def test_address_check_requires_exact_cidr():
