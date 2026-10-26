@@ -76,11 +76,11 @@ SD; JTAG boot added (`147bc66`). Report: `docs/reports/2026-10-25-tron-vrt-times
 
 ## Boot mode follows the rig (2026-10-26)
 `--boot auto` (the default in the wrapper, the example launcher and `hw-test.yml`) reads tron's
-`boot-mode` place tag (`jtag`|`sd`); with no tag (the case today) jtag is assumed and recorded as
-such. `boot-strategy` must stay `BootZynqMPJTAG`: adi-lg renders LG_ENV from it and both paths
+`boot-mode` place tag (`jtag`|`sd`; tron set to `boot-mode=jtag` on 2026-10-26); with no tag, jtag
+is assumed and recorded as such. `boot-strategy` must stay `BootZynqMPJTAG`: adi-lg renders LG_ENV from it and both paths
 need that driver. A bad tag stops the run before staging; an explicit `--boot` overrides the tag
 with a warning. `board-session.json` records `mode_source`. Unit-tested and resolved read-only
-against the live place; no hardware boot since this change, and the SD path is not re-exercised.
+against the live place (`jtag place tron boot-mode=jtag`); no hardware boot since this change, and the SD path is not re-exercised.
 
 ## Not done
 - Hard-fail table lives in `tests/hardware/test_hw_hopcap.py`.
