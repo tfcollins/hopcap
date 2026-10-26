@@ -182,3 +182,15 @@ def test_staged_sums_command_hashes_exactly_the_staged_names():
         boot.staged_sums_command(jtag.staged_names())
         == "sha256sum /boot/Image.vrt49.test /boot/system.vrt49.dtb"
     )
+
+
+def test_boot_mode_defaults_to_jtag():
+    env = {
+        "LG_ENV": "/tmp/tron.yaml",
+        "VRT49_CORUNDUM_BITSTREAM_REMOTE": "/tmp/j/system_top.bit",
+        "VRT49_CORUNDUM_PSU_INIT_REMOTE": "/tmp/j/psu_init.tcl",
+    }
+    assert boot.BootArtifacts.from_env(env).mode == "jtag"
+    del env["VRT49_CORUNDUM_PSU_INIT_REMOTE"]
+    with pytest.raises(boot.BootConfigError, match="PSU_INIT"):
+        boot.BootArtifacts.from_env(env)

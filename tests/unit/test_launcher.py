@@ -120,6 +120,17 @@ def test_operator_wrapper_jtag_boot_needs_an_xsa_and_rejects_unknown_modes(tmp_p
     base = ["--artifacts", str(tmp_path), "--url", "http://x", "--out", str(tmp_path / "o")]
     r = _run_wrapper(*base, "--boot", "jtag")
     assert r.returncode == 2 and "--boot jtag needs --xsa" in r.stderr
+    r = _run_wrapper(*base)  # jtag is the default since tron became JTAG-strapped (2026-10-25)
+    assert r.returncode == 2 and "--boot jtag needs --xsa" in r.stderr
+    r = _run_wrapper(*base, "--boot", "sd")
+    assert "--xsa" not in r.stderr and "SHA256SUMS" in r.stderr  # sd never asks for an XSA
+
+
+def test_operator_wrapper_finds_the_xsa_in_the_artifact_set(tmp_path):
+    (tmp_path / "system_top.xsa").write_bytes(b"x")
+    base = ["--artifacts", str(tmp_path), "--url", "http://x", "--out", str(tmp_path / "o")]
+    r = _run_wrapper(*base)
+    assert "--xsa" not in r.stderr and "SHA256SUMS" in r.stderr
     r = _run_wrapper(*base, "--boot", "usb")
     assert r.returncode == 2 and "--boot must be sd or jtag" in r.stderr
 

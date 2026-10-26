@@ -5,12 +5,14 @@
 #   scripts/run-tron-hopcap.sh --artifacts ~/hopcap-artifacts/boot-attempt3 --url http://10.0.0.71:8749/boot-attempt3 \
 #                              --out ~/hopcap-artifacts/run-<stamp> [--plan examples/plans/band-2400-2500-4slot.json] \
 #                              [--nm-qsfp vrt49-qsfp --nm-sfp vrt49-sfp] [--python ~/hopcap-venv/bin/python]
-#                              [--boot sd|jtag --xsa system_top.xsa]
+#                              [--boot jtag|sd] [--xsa system_top.xsa]
 #
-# --boot sd (default) replaces the SD card's BOOT.BIN/Image/system.dtb and power-cycles into it.
-# --boot jtag is for a JTAG-strapped tron: the PL bitstream and psu_init.tcl come from --xsa (the
-# build that produced the artifact set), are copied to the tron exporter for the session, and
-# the kernel/DTB are staged beside the stock files, as vrt49's Corundum CI does.
+# --boot jtag (default; tron is JTAG-strapped since 2026-10-25): the PL bitstream and psu_init.tcl
+# come from --xsa (default: system_top.xsa in the artifact set), the XSA of the build that produced
+# the artifacts. They are copied to the tron exporter for the session, and the kernel/DTB are
+# staged beside the stock files, as vrt49's Corundum CI does.
+# --boot sd replaces the SD card's BOOT.BIN/Image/system.dtb and power-cycles into them; it needs
+# the board strapped for SD boot.
 #
 # Derives the VRT49_CORUNDUM_*_URL/_SHA256 variables from the artifact directory's SHA256SUMS,
 # brings the QSFP receiver profile up (and the SFP one down, they share 192.0.2.2) for the
@@ -20,7 +22,7 @@
 set -euo pipefail
 here=$(cd "$(dirname "$0")/.." && pwd)
 artifacts=""; url=""; out=""; plan="examples/plans/band-2400-2500-4slot.json"
-nm_qsfp=""; nm_sfp=""; py=python3; wait_s=900; boot=sd; xsa=""; exporter=tron.local
+nm_qsfp=""; nm_sfp=""; py=python3; wait_s=900; boot=jtag; xsa=""; exporter=tron.local
 while [ $# -gt 0 ]; do
   case "$1" in
     --artifacts) artifacts=$2; shift 2 ;;
@@ -40,7 +42,8 @@ done
 test -n "$artifacts" -a -n "$url" -a -n "$out" || { echo "--artifacts, --url and --out are required" >&2; exit 2; }
 case "$boot" in sd|jtag) ;; *) echo "--boot must be sd or jtag" >&2; exit 2 ;; esac
 if [ "$boot" = jtag ]; then
-  test -n "$xsa" || { echo "--boot jtag needs --xsa" >&2; exit 2; }
+  if [ -z "$xsa" ] && [ -f "$artifacts/system_top.xsa" ]; then xsa=$artifacts/system_top.xsa; fi
+  test -n "$xsa" || { echo "--boot jtag needs --xsa (no system_top.xsa in $artifacts)" >&2; exit 2; }
   test -f "$xsa" || { echo "no $xsa" >&2; exit 2; }
 fi
 sums="$artifacts/SHA256SUMS"

@@ -1,12 +1,13 @@
 # SPDX-License-Identifier: LGPL-2.1-or-later
 # Adapted from vrt49 tests/integration/conftest.py (corundum_shell fixture, LGPL-2.1-or-later).
-"""Boot tron with exact artifacts: SD-strapped (BOOT.BIN+Image+system.dtb replace the stock
-trio, backed up once and restored at the end) or JTAG (PL + U-Boot over JTAG, test kernel/DTB
-staged beside stock).  The labgrid-dependent parts import lazily; the command builders and the
-environment contract are pure and unit-tested.
+"""Boot tron with exact artifacts: JTAG (the default: PL + U-Boot over JTAG, test kernel/DTB
+staged beside stock; tron is JTAG-strapped since 2026-10-25) or SD-strapped (BOOT.BIN+Image+
+system.dtb replace the stock trio, backed up once and restored at the end).  The
+labgrid-dependent parts import lazily; the command builders and the environment contract are
+pure and unit-tested.
 
 Environment contract (same names as vrt49 so one operator shell serves both repos):
-  LG_ENV, VRT49_CORUNDUM_BOOT=sd|jtag,
+  LG_ENV, VRT49_CORUNDUM_BOOT=jtag|sd (default jtag),
   VRT49_CORUNDUM_{BOOT_BIN,KERNEL,DTB}_URL / _SHA256   (BOOT_BIN only for sd)
   VRT49_CORUNDUM_BITSTREAM_REMOTE, VRT49_CORUNDUM_PSU_INIT_REMOTE   (jtag)
 """
@@ -48,7 +49,7 @@ class BootArtifacts:
         env_path = env.get("LG_ENV")
         if not env_path:
             raise BootConfigError("LG_ENV is required")
-        mode = env.get("VRT49_CORUNDUM_BOOT", "sd")
+        mode = env.get("VRT49_CORUNDUM_BOOT") or "jtag"
         if mode not in ("sd", "jtag"):
             raise BootConfigError("VRT49_CORUNDUM_BOOT must be sd or jtag")
 

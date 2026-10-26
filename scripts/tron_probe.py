@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: MIT
-"""Boot tron from its SD card with NO artifact staging and report what is there.
+"""Boot tron into its stock kernel with NO artifact staging and report what is there.
 
 Run inside an adi-lg reservation (LG_ENV set).  This is the first thing to do in a lab session:
-it proves the SD boot path works before any exact-artifact staging, and records the stock
-/boot checksums so a restore can be verified against an independent copy.
+it proves the boot path works before any exact-artifact staging, and records the stock
+/boot checksums so a restore can be verified against an independent copy.  The boot mode
+follows VRT49_CORUNDUM_BOOT (default jtag, which also needs VRT49_CORUNDUM_BITSTREAM_REMOTE and
+VRT49_CORUNDUM_PSU_INIT_REMOTE on the tron exporter); set it to sd for an SD-strapped board.
 
   adi-lg request --part adrv9009zu11eg --carrier adrv2crr-fmc --mode reserve --wait 600 \
     --run 'python3 scripts/tron_probe.py --out probe.json'
@@ -28,7 +30,6 @@ def main() -> int:
     ap.add_argument("--keep-powered", action="store_true")
     args = ap.parse_args()
     env = dict(os.environ)
-    env["VRT49_CORUNDUM_BOOT"] = env.get("VRT49_CORUNDUM_BOOT", "sd")
     for k in list(env):
         if k.startswith("VRT49_CORUNDUM_") and k.endswith(("_URL", "_SHA256")):
             del env[k]  # probe never stages

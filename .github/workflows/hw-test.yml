@@ -3,8 +3,15 @@ name: Hardware test (tron)
 on:
   workflow_dispatch:
     inputs:
-      boot_bin_url: { description: "BOOT.BIN URL", required: true, type: string }
-      boot_bin_sha256: { description: "BOOT.BIN SHA-256", required: true, type: string }
+      boot:
+        description: "jtag (PL + psu_init from the XSA over JTAG) or sd (BOOT.BIN on the SD card)"
+        type: choice
+        options: [jtag, sd]
+        default: jtag
+      xsa_url: { description: "system_top.xsa URL (jtag)", required: false, type: string }
+      xsa_sha256: { description: "system_top.xsa SHA-256 (jtag)", required: false, type: string }
+      boot_bin_url: { description: "BOOT.BIN URL (sd)", required: false, type: string }
+      boot_bin_sha256: { description: "BOOT.BIN SHA-256 (sd)", required: false, type: string }
       kernel_url: { description: "Image URL", required: true, type: string }
       kernel_sha256: { description: "Image SHA-256", required: true, type: string }
       dtb_url: { description: "system.dtb URL", required: true, type: string }
@@ -38,7 +45,7 @@ jobs:
     runs-on: [self-hosted, hw-nemo]
     timeout-minutes: 90
     env:
-      VRT49_CORUNDUM_BOOT: sd
+      VRT49_CORUNDUM_BOOT: ${{ inputs.boot }}
       VRT49_PHYSICAL_PORT: qsfp
       VRT49_CORUNDUM_BOOT_BIN_URL: ${{ inputs.boot_bin_url }}
       VRT49_CORUNDUM_BOOT_BIN_SHA256: ${{ inputs.boot_bin_sha256 }}
@@ -62,8 +69,32 @@ jobs:
           uv venv .venv-hw
           uv pip install --python .venv-hw/bin/python -e third_party/tick -e ".[test,hardware,lab]" \
             "labgrid-plugins @ git+https://github.com/tfcollins/labgrid-plugins@$(cat labgrid-plugins.lock)"
+      - name: Stage the JTAG boot inputs on the tron exporter
+        if: inputs.boot == 'jtag'
+        env:
+          XSA_URL: ${{ inputs.xsa_url }}
+          XSA_SHA256: ${{ inputs.xsa_sha256 }}
+        run: |
+          set -euo pipefail
+          test -n "$XSA_URL" -a -n "$XSA_SHA256" || { echo "jtag boot needs xsa_url and xsa_sha256" >&2; exit 1; }
+          local_dir="$RUNNER_TEMP/hopcap-jtag"
+          rm -rf "$local_dir" && mkdir -p "$local_dir"
+          curl -sSf -o "$local_dir/system_top.xsa" "$XSA_URL"
+          echo "$XSA_SHA256  $local_dir/system_top.xsa" | sha256sum -c -
+          .venv-hw/bin/python scripts/extract_jtag_inputs.py "$local_dir/system_top.xsa" "$local_dir"
+          remote="/tmp/hopcap-jtag-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          echo "JTAG_REMOTE=$remote" >> "$GITHUB_ENV"
+          ssh -o BatchMode=yes -o ConnectTimeout=15 tron.local "rm -rf -- '$remote' && mkdir -p '$remote'"
+          rsync -a -- "$local_dir/system_top.bit" "$local_dir/psu_init.tcl" "tron.local:$remote/"
+          {
+            echo "VRT49_CORUNDUM_BITSTREAM_REMOTE=$remote/system_top.bit"
+            echo "VRT49_CORUNDUM_PSU_INIT_REMOTE=$remote/psu_init.tcl"
+          } >> "$GITHUB_ENV"
       - name: Run on tron through adi-lg
         run: .venv-hw/bin/python examples/hardware/zu11eg_hopcap.py --run --junit evidence/junit-hopcap-tron.xml
+      - name: Remove the JTAG boot inputs from the tron exporter
+        if: always() && env.JTAG_REMOTE != ''
+        run: ssh -o BatchMode=yes -o ConnectTimeout=15 tron.local "rm -rf -- '$JTAG_REMOTE'"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
