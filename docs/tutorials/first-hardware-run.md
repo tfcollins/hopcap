@@ -23,7 +23,7 @@ evidence directory, a verified boot evidence directory served over HTTP, a reser
 
    ```sh
    export HOPCAP_PLAN=examples/plans/band-2400-2500-4slot.json HOPCAP_OUT=$PWD/out/run1
-   # VRT49_CORUNDUM_BOOT unset (= auto) follows tron's boot-strategy place tag: JTAG today.
+   # VRT49_CORUNDUM_BOOT unset (= auto) follows tron's boot-mode place tag (jtag if unset).
    export VRT49_CORUNDUM_BITSTREAM_REMOTE=/tmp/<dir on tron>/system_top.bit \
           VRT49_CORUNDUM_PSU_INIT_REMOTE=/tmp/<dir on tron>/psu_init.tcl \
           VRT49_CORUNDUM_KERNEL_URL=... VRT49_CORUNDUM_KERNEL_SHA256=... \
@@ -33,7 +33,7 @@ evidence directory, a verified boot evidence directory served over HTTP, a reser
 
    `scripts/run-tron-hopcap.sh` does all of this from an artifact directory and the build's
    XSA, including copying the bitstream and `psu_init.tcl` to tron
-   ([runbook](../how-to/tron-nemo-runbook.md)). On an SD-strapped board (tag `BootFPGASoC`) auto
+   ([runbook](../how-to/tron-nemo-runbook.md)). On an SD-strapped board (tag `boot-mode=sd`) auto
    picks SD, which needs `VRT49_CORUNDUM_BOOT_BIN_URL`/`_SHA256` instead of the two JTAG paths.
    Set `VRT49_CORUNDUM_BOOT=jtag` or `sd` to override the tag.
 

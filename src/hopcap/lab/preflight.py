@@ -4,10 +4,12 @@ scripts/preflight-zu11eg-hil.py). Checks the XL710 QSFP receiver NIC, its 192.0.
 address, the labgrid place tags, the shared hardware lock and coordinator reachability.
 Never acquires, boots or changes links.
 
-`--boot-mode` prints only `<jtag|sd> <boot-strategy tag>`: the place's `boot-strategy` tag is the
-lab's record of how tron is strapped, and the run wrapper picks the boot path from it. The raw
-`show` output carries the power outlet's bearer token, so only the place's own lines are parsed
-and none of it is ever printed."""
+`--boot-mode` prints only `<jtag|sd> <where that came from>`. The place's `boot-mode` tag is the
+lab's record of how tron's boot-mode switches are set. It is not `boot-strategy`: adi-lg renders
+LG_ENV from that tag, and hopcap drives both boot paths through BootZynqMPJTAG, so it stays
+`BootZynqMPJTAG` whichever way the board is strapped. With no `boot-mode` tag, jtag (tron's setup
+since 2026-10-25) is assumed and the source says so. The raw `show` output carries the power
+outlet's bearer token, so only the place's own lines are parsed and none of it is ever printed."""
 
 from __future__ import annotations
 
@@ -24,8 +26,11 @@ from pathlib import Path
 COORDINATOR = "10.0.0.41:20408"
 PLACE = "tron"
 TAGS = {"daughter-board": "adrv9009zu11eg", "carrier": "adrv2crr-fmc", "runner": "hw-nemo"}
-# boot-strategy tag -> hopcap boot path. Whoever re-straps tron's boot-mode switches changes the tag.
-BOOT_MODES = {"BootZynqMPJTAG": "jtag", "BootFPGASoC": "sd"}
+# hopcap's TronSession drives both boot paths through this labgrid strategy (adi-lg renders LG_ENV
+# from the boot-strategy tag); the straps are recorded separately in the boot-mode tag.
+BOOT_STRATEGY = "BootZynqMPJTAG"
+BOOT_MODES = ("jtag", "sd")
+ASSUMED_MODE = "jtag"
 RECEIVER_MAC = "64:9d:99:6f:a9:6a"  # nemo XL710 enp4s0f0np0 (QSFP lane-0 DAC to tron)
 RECEIVER_DRIVER = "i40e"
 RECEIVER_IPV4 = "192.0.2.2/24"
@@ -123,13 +128,13 @@ def _place_section(raw: str) -> tuple[bool, dict[str, str], str | None]:
 def validate_place(raw: str) -> dict:
     exact, tags, acquired = _place_section(raw)
     matches = {k: tags.get(k) == v for k, v in TAGS.items()}
-    strategy = tags.get("boot-strategy")
+    mode = tags.get("boot-mode")
     return {
         "ok": exact and all(matches.values()),
         "exact_place": exact,
         "tag_matches": matches,
-        "boot_strategy": strategy,
-        "boot_mode": BOOT_MODES.get(strategy),
+        "boot_strategy": tags.get("boot-strategy"),
+        "boot_mode": mode if mode in BOOT_MODES else None,
         "acquired": acquired,
     }
 
@@ -141,17 +146,21 @@ def boot_mode_from_show(raw: str) -> dict:
             f"labgrid did not describe place {PLACE}; pass --boot jtag or --boot sd"
         )
     strategy = tags.get("boot-strategy")
-    if not strategy:
+    if strategy != BOOT_STRATEGY:
         raise BootModeError(
-            f"place {PLACE} has no boot-strategy tag; pass --boot jtag or --boot sd"
+            f"place {PLACE} boot-strategy={strategy}, but hopcap boots tron through "
+            f"{BOOT_STRATEGY} in both modes: set boot-strategy={BOOT_STRATEGY} and record the "
+            "straps in the boot-mode tag (jtag|sd)"
         )
-    if strategy not in BOOT_MODES:
-        known = ", ".join(f"{k} ({v})" for k, v in BOOT_MODES.items())
+    mode = tags.get("boot-mode")
+    if mode is None:
+        source = f"no boot-mode tag on place {PLACE}; {ASSUMED_MODE} assumed"
+        return {"mode": ASSUMED_MODE, "source": source, "boot_strategy": strategy}
+    if mode not in BOOT_MODES:
         raise BootModeError(
-            f"place {PLACE} boot-strategy={strategy} is not one of {known}; "
-            "pass --boot jtag or --boot sd"
+            f"place {PLACE} boot-mode={mode} is not jtag or sd; pass --boot jtag or --boot sd"
         )
-    return {"mode": BOOT_MODES[strategy], "boot_strategy": strategy}
+    return {"mode": mode, "source": f"place {PLACE} boot-mode={mode}", "boot_strategy": strategy}
 
 
 def find_labgrid_client() -> str | None:
@@ -278,7 +287,7 @@ def main(argv: list[str] | None = None) -> int:
         except BootModeError as exc:
             print(exc, file=sys.stderr)
             return 2
-        print(f"{r['mode']} {r['boot_strategy']}")
+        print(f"{r['mode']} {r['source']}")
         return 0
     if args:
         print("usage: python -m hopcap.lab.preflight [--boot-mode]", file=sys.stderr)

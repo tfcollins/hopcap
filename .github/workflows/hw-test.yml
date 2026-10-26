@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       boot:
-        description: "auto (tron's boot-strategy place tag), jtag (PL + psu_init from the XSA over JTAG) or sd (BOOT.BIN on the SD card)"
+        description: "auto (tron's boot-mode place tag; jtag if unset), jtag (PL + psu_init from the XSA over JTAG) or sd (BOOT.BIN on the SD card)"
         type: choice
         options: [auto, jtag, sd]
         default: auto
@@ -75,7 +75,7 @@ jobs:
           set -euo pipefail
           if [ "$BOOT" = auto ]; then
             tag=$(.venv-hw/bin/python -m hopcap.lab.preflight --boot-mode)
-            mode=${tag%% *}; source="place tron boot-strategy=${tag#* }"
+            mode=${tag%% *}; source=${tag#* }
           else
             mode=$BOOT; source="workflow input boot=$BOOT"
           fi

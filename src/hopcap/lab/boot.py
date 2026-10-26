@@ -2,13 +2,14 @@
 # Adapted from vrt49 tests/integration/conftest.py (corundum_shell fixture, LGPL-2.1-or-later).
 """Boot tron with exact artifacts, by whichever path the board is strapped for: JTAG (PL + U-Boot
 over JTAG, test kernel/DTB staged beside stock) or SD (BOOT.BIN+Image+system.dtb replace the stock
-trio, backed up once and restored at the end).  The mode follows the labgrid place's
-`boot-strategy` tag unless it is set explicitly; tron has been JTAG-strapped since 2026-10-25.
+trio, backed up once and restored at the end).  Both go through the BootZynqMPJTAG strategy.  The
+mode follows the labgrid place's `boot-mode` tag unless it is set explicitly (jtag when the tag is
+absent); tron has been JTAG-strapped since 2026-10-25.
 The labgrid-dependent parts import lazily; the command builders and the environment contract are
 pure and unit-tested.
 
 Environment contract (same names as vrt49 so one operator shell serves both repos):
-  LG_ENV, VRT49_CORUNDUM_BOOT=auto|jtag|sd (default auto: the place's boot-strategy tag),
+  LG_ENV, VRT49_CORUNDUM_BOOT=auto|jtag|sd (default auto: the place's boot-mode tag),
   VRT49_CORUNDUM_{BOOT_BIN,KERNEL,DTB}_URL / _SHA256   (BOOT_BIN only for sd)
   VRT49_CORUNDUM_BITSTREAM_REMOTE, VRT49_CORUNDUM_PSU_INIT_REMOTE   (jtag)
   HOPCAP_BOOT_SOURCE   (optional: why an explicit mode was chosen, recorded in the session)
@@ -63,8 +64,7 @@ class BootArtifacts:
                 resolved = (resolve_mode or detect_boot_mode)()
             except BootModeError as exc:
                 raise BootConfigError(str(exc)) from None
-            mode = resolved["mode"]
-            source = f"place tron boot-strategy={resolved['boot_strategy']}"
+            mode, source = resolved["mode"], resolved["source"]
 
         def pair(prefix: str) -> tuple[str, str] | None:
             url, sha = env.get(f"{prefix}_URL"), env.get(f"{prefix}_SHA256")

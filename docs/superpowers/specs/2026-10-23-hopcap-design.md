@@ -44,7 +44,7 @@ point at.
   drops are hard failures.
 - Deploy = SD staging (`VRT49_CORUNDUM_BOOT=sd`, how the QSFP run was done); JTAG supported.
   *2026-10-25:* JTAG is now the default (tron no longer boots from SD); SD stays available.
-  *2026-10-26:* the mode follows the place's `boot-strategy` tag (`--boot auto`), so either
+  *2026-10-26:* the mode follows the place's `boot-mode` tag (`--boot auto`), so either
   strapping runs without a code change.
 
 ## Architecture

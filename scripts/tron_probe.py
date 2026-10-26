@@ -5,7 +5,7 @@
 Run inside an adi-lg reservation (LG_ENV set).  This is the first thing to do in a lab session:
 it proves the boot path works before any exact-artifact staging, and records the stock
 /boot checksums so a restore can be verified against an independent copy.  The boot mode
-follows VRT49_CORUNDUM_BOOT (default auto: the place's boot-strategy tag); jtag also needs
+follows VRT49_CORUNDUM_BOOT (default auto: the place's boot-mode tag, jtag if unset); jtag also needs
 VRT49_CORUNDUM_BITSTREAM_REMOTE and VRT49_CORUNDUM_PSU_INIT_REMOTE on the tron exporter.
 
   adi-lg request --part adrv9009zu11eg --carrier adrv2crr-fmc --mode reserve --wait 600 \

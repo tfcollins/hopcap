@@ -112,9 +112,9 @@ def test_sd_boot_needs_boot_bin_and_jtag_boot_needs_the_pl_inputs():
 def test_auto_boot_resolves_from_the_place_tag_before_reserving():
     env = dict(BASE_ENV)
     env.pop("VRT49_CORUNDUM_BOOT", None)
-    launcher.resolve_boot(env, detect=lambda: {"mode": "sd", "boot_strategy": "BootFPGASoC"})
+    launcher.resolve_boot(env, detect=lambda: {"mode": "sd", "source": "place tron boot-mode=sd"})
     assert env["VRT49_CORUNDUM_BOOT"] == "sd"
-    assert env["HOPCAP_BOOT_SOURCE"] == "place tron boot-strategy=BootFPGASoC"
+    assert env["HOPCAP_BOOT_SOURCE"] == "place tron boot-mode=sd"
     with pytest.raises(ValueError, match="BOOT_BIN_URL"):
         launcher.require_env(env)  # mode-specific inputs are checked before the reservation
 
@@ -128,9 +128,11 @@ def test_auto_boot_resolves_from_the_place_tag_before_reserving():
     from hopcap.lab.preflight import BootModeError
 
     def unreadable():
-        raise BootModeError("place tron has no boot-strategy tag; pass --boot jtag or --boot sd")
+        raise BootModeError(
+            "place tron boot-mode=usb is not jtag or sd; pass --boot jtag or --boot sd"
+        )
 
-    with pytest.raises(ValueError, match="boot-strategy"):
+    with pytest.raises(ValueError, match="boot-mode=usb"):
         launcher.resolve_boot(dict(BASE_ENV, VRT49_CORUNDUM_BOOT="auto"), detect=unreadable)
 
 
@@ -142,14 +144,14 @@ def _run_wrapper(*args):
     )
 
 
-def _fake_python(tmp_path, answer="jtag BootZynqMPJTAG", rc=0):
+def _fake_python(tmp_path, answer="jtag place tron boot-mode=jtag", rc=0):
     """A --python that answers the wrapper's boot-mode query as the place tag would."""
     py = tmp_path / "fakepy"
     py.write_text(
         "#!/bin/sh\n"
         'if [ "$1 $2 $3" = "-m hopcap.lab.preflight --boot-mode" ]; then\n'
         f"  [ -n '{answer}' ] && echo '{answer}'\n"
-        f"  [ {rc} -eq 0 ] || echo 'place tron: no boot-strategy tag' >&2\n"
+        f"  [ {rc} -eq 0 ] || echo 'place tron boot-strategy=BootFPGASoC' >&2\n"
         f"  exit {rc}\n"
         "fi\n"
         'exec python3 "$@"\n'
@@ -173,23 +175,27 @@ def _base(tmp_path, **fake):
 
 def test_operator_wrapper_takes_the_boot_mode_from_the_place_tag(tmp_path):
     r = _run_wrapper(*_base(tmp_path))  # --boot auto is the default
-    assert "boot: jtag (place tron boot-strategy=BootZynqMPJTAG)" in r.stdout
+    assert "boot: jtag (place tron boot-mode=jtag)" in r.stdout
     assert r.returncode == 2 and "--boot jtag needs --xsa" in r.stderr
-    r = _run_wrapper(*_base(tmp_path, answer="sd BootFPGASoC"))
-    assert "boot: sd (place tron boot-strategy=BootFPGASoC)" in r.stdout
+    r = _run_wrapper(*_base(tmp_path, answer="sd place tron boot-mode=sd"))
+    assert "boot: sd (place tron boot-mode=sd)" in r.stdout
     assert "--xsa" not in r.stderr and "SHA256SUMS" in r.stderr  # sd never asks for an XSA
 
 
 def test_operator_wrapper_fails_closed_when_the_tag_cannot_be_read(tmp_path):
     r = _run_wrapper(*_base(tmp_path, answer="", rc=2))
     assert r.returncode == 2 and "pass --boot jtag or --boot sd" in r.stderr
+    assert "BootFPGASoC" in r.stderr, "the resolver's reason reaches the operator"
     assert "SHA256SUMS" not in r.stderr, "stops before touching the artifact set"
 
 
 def test_operator_wrapper_explicit_boot_overrides_the_tag_with_a_warning(tmp_path):
     r = _run_wrapper(*_base(tmp_path), "--boot", "sd")
-    assert "WARNING: --boot sd overrides place tron boot-strategy=BootZynqMPJTAG" in r.stderr
+    assert "WARNING: --boot sd overrides place tron boot-mode=jtag" in r.stderr
     assert "boot: sd (--boot sd)" in r.stdout and "SHA256SUMS" in r.stderr
+    assumed = "jtag no boot-mode tag on place tron; jtag assumed"
+    r = _run_wrapper(*_base(tmp_path, answer=assumed), "--boot", "sd")
+    assert "WARNING" not in r.stderr, "nothing to override when the tag is absent"
     r = _run_wrapper(*_base(tmp_path, answer="", rc=2), "--boot", "jtag")
     assert "boot: jtag (--boot jtag)" in r.stdout and "--boot jtag needs --xsa" in r.stderr
 

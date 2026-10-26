@@ -4,19 +4,23 @@ Verify every host fact against `~/dev/infra/HOSTS.md` before use.
 
 - **Board**: ADRV9009-ZU11EG on ADRV2CRR-FMC, labgrid place `tron`, coordinator
   `10.0.0.41:20408`. Two boot paths through `scripts/run-tron-hopcap.sh`, chosen by `--boot`:
-  - `--boot auto` (default) follows the place's `boot-strategy` tag, the lab's record of how the
-    boot-mode switches are set: `BootZynqMPJTAG` → jtag, `BootFPGASoC` → sd. Any other value, or a
-    tag labgrid can't read, stops the run before anything is staged; pass `--boot` explicitly then.
-    An explicit `--boot` wins over the tag, with a warning when they disagree. The chosen mode and
-    why (`mode_source`) land in `board-session.json`. Whoever moves the switches changes the tag.
+  - `--boot auto` (default) follows the place's `boot-mode` tag (`jtag`|`sd`), the lab's record of
+    how the boot-mode switches are set; with no `boot-mode` tag, jtag is assumed and the run says
+    so. Any other value, or a place labgrid can't describe, stops the run before anything is staged;
+    pass `--boot` explicitly then. An explicit `--boot` wins over the tag, with a warning when they
+    disagree. The chosen mode and why (`mode_source`) land in `board-session.json`. Whoever moves
+    the switches changes the tag (`labgrid-client -p tron set-tags boot-mode=sd`).
     `PYTHONPATH=src python3 -m hopcap.lab.preflight --boot-mode` prints what auto would pick.
-  - `jtag` (tron's setup since 2026-10-25, tag `BootZynqMPJTAG`): the PL bitstream and
+  - `boot-strategy` is not the strap record. adi-lg renders `LG_ENV` from it, and hopcap drives
+    both paths through `BootZynqMPJTAG`, so it stays `BootZynqMPJTAG` whichever way tron is
+    strapped (it already was while tron was SD-strapped, 2026-10-20..25). Any other value stops the run.
+  - `jtag` (tron's setup since 2026-10-25): the PL bitstream and
     `psu_init.tcl` come from the XSA of the build under test (`--xsa FILE`, default
     `system_top.xsa` in the artifact set) and load over JTAG (`BootZynqMPJTAG`,
     `LG_FORCE_LOCAL_XSDB=1` on tron); the kernel/DTB are staged beside the stock files as
     `Image.vrt49.test`/`system.vrt49.dtb`. This is vrt49's Corundum CI path. tron moved to it when
     an SD-strapped power-on printed nothing for 300 s while vrt49's JTAG boot of the same board passed.
-  - `sd` (an SD-strapped board, tag `BootFPGASoC`): the SD card's `BOOT.BIN`/`Image`/`system.dtb`
+  - `sd` (an SD-strapped board, `boot-mode=sd`): the SD card's `BOOT.BIN`/`Image`/`system.dtb`
     are replaced and the board power-cycles into them, then the stock trio is restored. The files
     are staged from the running Linux, so the SD mux is not needed.
 - **Link**: tron QSFP cage lane 0 ↔ nemo XL710 `enp4s0f0np0` (i40e, MAC `64:9d:99:6f:a9:6a`,

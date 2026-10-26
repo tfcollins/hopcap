@@ -7,9 +7,10 @@
 #                              [--nm-qsfp vrt49-qsfp --nm-sfp vrt49-sfp] [--python ~/hopcap-venv/bin/python]
 #                              [--boot auto|jtag|sd] [--xsa system_top.xsa]
 #
-# --boot auto (default) follows the labgrid place's boot-strategy tag, the lab's record of how tron
-# is strapped: BootZynqMPJTAG -> jtag (the setup since 2026-10-25), BootFPGASoC -> sd. An explicit
-# --boot wins over the tag, with a warning when they disagree.
+# --boot auto (default) follows the labgrid place's boot-mode tag (jtag|sd), the lab's record of how
+# tron's boot-mode switches are set; with no tag, jtag (the setup since 2026-10-25) is assumed. Both
+# paths run under boot-strategy=BootZynqMPJTAG. An explicit --boot wins over the tag, with a
+# warning when they disagree.
 # jtag: the PL bitstream and psu_init.tcl come from --xsa (default: system_top.xsa in the artifact
 # set), the XSA of the build that produced the artifacts. They are copied to the tron exporter for
 # the session, and the kernel/DTB are staged beside the stock files, as vrt49's Corundum CI does.
@@ -43,18 +44,19 @@ while [ $# -gt 0 ]; do
 done
 test -n "$artifacts" -a -n "$url" -a -n "$out" || { echo "--artifacts, --url and --out are required" >&2; exit 2; }
 case "$boot" in auto|sd|jtag) ;; *) echo "--boot must be auto, jtag or sd" >&2; exit 2 ;; esac
-# "<mode> <boot-strategy>" from the place tag; empty when labgrid can't say (auto prints why).
+# "<mode> <source>" from the place tags; empty when labgrid can't say (auto prints why).
 boot_tag() { PYTHONPATH="$here/src" "$py" -m hopcap.lab.preflight --boot-mode; }
 if [ "$boot" = auto ]; then
   tag=$(boot_tag) || tag=""
-  test -n "$tag" || { echo "--boot auto: tron's boot-strategy tag is unreadable; pass --boot jtag or --boot sd" >&2; exit 2; }
-  boot=${tag%% *}; boot_source="place tron boot-strategy=${tag#* }"
+  test -n "$tag" || { echo "--boot auto: tron's boot mode is unresolved; pass --boot jtag or --boot sd" >&2; exit 2; }
+  boot=${tag%% *}; boot_source=${tag#* }
 else
   tag=$(boot_tag 2>/dev/null) || tag=""
   boot_source="--boot $boot"
-  if [ -n "$tag" ] && [ "${tag%% *}" != "$boot" ]; then
-    echo "WARNING: --boot $boot overrides place tron boot-strategy=${tag#* } (which selects ${tag%% *})" >&2
-  fi
+  case "${tag#* }" in
+    "place tron boot-mode="*)
+      [ "${tag%% *}" = "$boot" ] || echo "WARNING: --boot $boot overrides ${tag#* }" >&2 ;;
+  esac
 fi
 echo "boot: $boot ($boot_source)"
 if [ "$boot" = jtag ]; then

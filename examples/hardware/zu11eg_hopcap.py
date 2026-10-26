@@ -39,7 +39,7 @@ REQUIRED_ENV = (
     "VRT49_CORUNDUM_DTB_URL",
     "VRT49_CORUNDUM_DTB_SHA256",
 )
-# VRT49_CORUNDUM_BOOT=auto (or unset) takes the mode from the place's boot-strategy tag before the
+# VRT49_CORUNDUM_BOOT=auto (or unset) takes the mode from the place's boot-mode tag before the
 # reservation. sd: BOOT.BIN replaces the stock trio. jtag: the PL and psu_init are loaded over JTAG
 # from paths on the tron exporter, and the kernel/DTB are staged beside the stock files.
 REQUIRED_ENV_BY_BOOT = {
@@ -116,7 +116,7 @@ def resolve_boot(env, *, detect=None) -> None:
     except BootModeError as exc:
         raise ValueError(str(exc)) from None
     env["VRT49_CORUNDUM_BOOT"] = r["mode"]
-    env["HOPCAP_BOOT_SOURCE"] = f"place tron boot-strategy={r['boot_strategy']}"
+    env["HOPCAP_BOOT_SOURCE"] = r["source"]
 
 
 def require_env(env) -> None:

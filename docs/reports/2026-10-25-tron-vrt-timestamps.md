@@ -69,8 +69,8 @@ build's XSA, and the kernel and DTB are staged beside the stock files. The first
 also showed that the session left tron powered after a failed boot; that is fixed (`9a6eab1`),
 and the second failed boot powered the board off.
 
-*2026-10-26:* the default is now `--boot auto`, which follows the place's `boot-strategy` tag
-(`BootZynqMPJTAG` today). SD boot stays supported for an SD-strapped board (tag `BootFPGASoC`).
+*2026-10-26:* the default is now `--boot auto`, which follows the place's `boot-mode` tag (jtag
+when unset, as today). SD boot stays supported for an SD-strapped board (`boot-mode=sd`).
 
 ## Evidence
 
