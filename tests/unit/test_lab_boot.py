@@ -75,3 +75,94 @@ def test_sd_boot_command_imports_uenv_without_running_uenvcmd():
 
 def test_shell_value_strips_prompt_noise():
     assert boot.parse_shell_value(["", "abc  def", ""]) == "abc  def"
+
+
+# --- power state across a failed SD boot ---------------------------------------------------
+
+
+def _status_enum():
+    """The plugin's Status enum when adi_lg_plugins is installed, else a stand-in module."""
+    import enum
+    import sys
+    import types
+
+    try:
+        from adi_lg_plugins.strategies.bootzynqmpjtag import Status
+    except ImportError:
+        Status = enum.Enum("Status", "unknown powered_off powered_on kuiper_shell", start=0)
+        mod = types.ModuleType("adi_lg_plugins.strategies.bootzynqmpjtag")
+        mod.Status = Status
+        for name in ("adi_lg_plugins", "adi_lg_plugins.strategies"):
+            sys.modules.setdefault(name, types.ModuleType(name))
+        sys.modules[mod.__name__] = mod
+    return Status
+
+
+class _Outlet:
+    def __init__(self):
+        self.on_ = None
+
+    def on(self):
+        self.on_ = True
+
+    def off(self):
+        self.on_ = False
+
+
+class _DeadConsole:
+    def expect(self, pattern, timeout=None):
+        raise OSError("read failed: socket disconnected")
+
+
+class _Strategy:
+    """BootZynqMPJTAG's transition contract for powered_off: a no-op when its recorded status is
+    already powered_off, otherwise outlet off."""
+
+    kuiper_kernel_marker, kuiper_shell_marker, kuiper_boot_timeout = "Starting kernel", "#", 1
+
+    def __init__(self, status_enum):
+        self.S = status_enum
+        self.status = status_enum.unknown
+        self.power = _Outlet()
+        self.shell = type("Shell", (), {"console": _DeadConsole()})()
+
+    def transition(self, status):
+        status = self.S[status] if isinstance(status, str) else status
+        if status == self.status:
+            return
+        if status == self.S.powered_off:
+            self.power.off()
+        self.status = status
+
+    def _activate_shell_bypass(self):
+        return self.shell
+
+
+class _Target:
+    def activate(self, _driver):
+        pass
+
+    def cleanup(self):
+        pass
+
+
+def test_a_failed_sd_boot_still_powers_the_board_off(tmp_path):
+    """tron 2026-10-25: the console dropped 2.7 s after power-on, and the board was left on
+    because the strategy still believed it was powered_off."""
+    strategy = _Strategy(_status_enum())
+    artifacts = boot.BootArtifacts(
+        env_path=str(tmp_path / "env.yaml"),
+        mode="sd",
+        kernel=("http://x/Image", SHA),
+        dtb=("http://x/system.dtb", SHA),
+        boot_bin=("http://x/BOOT.BIN", SHA),
+        bitstream_remote=None,
+        psu_init_remote=None,
+    )
+    session = boot.TronSession(artifacts, log=lambda _m: None)
+    session._new_target = lambda **_kw: (_Target(), strategy)
+    with pytest.raises(OSError, match="socket disconnected"):
+        session.boot_exact()
+    assert strategy.power.on_ is True
+    session.restore_and_power_off()
+    assert strategy.power.on_ is False, "board left powered after a failed boot"

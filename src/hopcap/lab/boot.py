@@ -186,6 +186,10 @@ class TronSession:
 
             self._power_off()
             shell = self.strategy._activate_shell_bypass()
+            # Powering on outside transition() leaves the strategy's status at powered_off, and its
+            # transition("powered_off") is then a no-op: record the outlet first so a failed boot
+            # still powers the board off.
+            self.strategy.status = Status.powered_on
             self.strategy.power.on()
             shell.console.expect(
                 self.strategy.kuiper_kernel_marker, timeout=self.strategy.kuiper_boot_timeout
