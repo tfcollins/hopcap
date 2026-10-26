@@ -1,4 +1,4 @@
-# STATUS — 2026-10-23 — END TO END on tron: Tick→FHM→hop controller→Context→QSFP→host captures tagged with hop frequency
+# STATUS — 2026-10-25 — END TO END on tron with real VRT timestamps: Tick→FHM→hop controller→Context→QSFP→host captures tagged with hop frequency, sample-exact timestamps
 
 Plan: `docs/superpowers/specs/2026-10-23-hopcap-design.md`. Ledger of rulings in the commit history.
 
@@ -67,8 +67,17 @@ epochs 1..5, 0-tick skew, FPGA 0 drops; 3/5 captures complete, 2 short by ~90 pa
 ring `rx_missed_errors` (178). Plan test fails only the ≥95 % completeness gate. Report:
 `docs/reports/2026-10-23-tron-first-run.md`. Next: `ethtool -G enp4s0f0np0 rx 8160` on nemo (root).
 
+## VRT timestamps (2026-10-25) — fixed, verified on tron
+Every VRT timestamp up to run 7 was 0: vrt49's overlay boots the framer's PPS time base disabled
+and hopcap never enabled it. `framer.configure()` now arms it (`ee31887`) and `hopcap.stamps`
+checks every in-capture step. Run `tsfix-20261025-2130`: 4/4 hardware tests, 5/5 hops `ok`,
+3,410/3,410 steps sample-exact, 0 zero stamps, lock held, 0 NIC loss. tron no longer boots from
+SD; the launcher defaults to JTAG boot (`147bc66`). Report: `docs/reports/2026-10-25-tron-vrt-timestamps.md`.
+
 ## Not done
-- No hardware run yet. Hard-fail table lives in `tests/hardware/test_hw_hopcap.py`.
+- Hard-fail table lives in `tests/hardware/test_hw_hopcap.py`.
+- The 62.8 µs excess on the priming hop's VRT-vs-Tick spacing is unexplained; no PPS edge has
+  yet fallen inside a capture on hardware.
 - Upstream PRs (vrt49 `VRT_FABRIC_HOP_ENABLE`, Tick `--system-top`); `overlays/patches/` is empty
   because the assembler currently edits the staged tree directly.
 - Talise settle time is a knob, not a measured figure.

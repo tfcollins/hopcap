@@ -43,6 +43,7 @@ point at.
 - Host NIC loss is **report-only** (known residual 1e-5..3e-4 `rx_missed_errors`); FPGA-side
   drops are hard failures.
 - Deploy = SD staging (`VRT49_CORUNDUM_BOOT=sd`, how the QSFP run was done); JTAG supported.
+  *2026-10-25:* JTAG is now the default (tron no longer boots from SD); SD stays available.
 
 ## Architecture
 
