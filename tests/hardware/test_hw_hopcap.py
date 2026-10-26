@@ -105,6 +105,15 @@ def test_hop_capture_plan(board, components):
     non_priming = [h for h in hops if not h["priming"]]
     complete = sum(1 for h in non_priming if h["complete"])
     assert complete >= MIN_COMPLETE_FRACTION * len(non_priming), (complete, len(non_priming))
+    # VRT timestamps: armed and LOCKED before the stream, still LOCKED with no synthetic edge
+    # and no resync after it, and every in-capture step sample-exact (boot-attempt3 stamped 0)
+    tb = man["time_base"]
+    armed, after, st = tb["armed"]["after_arm"], tb["after"], tb["stamps"]
+    assert armed["lock_state"] == "locked", tb["armed"]
+    assert after["lock_state"] == "locked" and after["missed"] == armed["missed"], after
+    assert not after["resync_sticky"], after
+    assert st["steps_checked"] > 0 and st["zero_stamps"] == 0, st
+    assert st["step_errors"] == 0 and st["non_increasing"] == 0, st
     # report-only
     print(
         json.dumps(
@@ -112,6 +121,13 @@ def test_hop_capture_plan(board, components):
                 "host_rx": man["counters"].get("host_after"),
                 "incomplete": [h["index"] for h in hops if not h["complete"]],
                 "stage_late": [h["index"] for h in hops if h["stage_late"]],
+                "time_base_before_arm": tb["armed"]["before"],
+                "pps_crossings": [
+                    st["second_crossings"],
+                    st["crossing_residual_ps_min"],
+                    st["crossing_residual_ps_max"],
+                ],
+                "hop_spacing_residual_ps": tb["hop_spacing_residual_ps"],
             },
             indent=2,
         )

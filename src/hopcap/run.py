@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from hopcap import framer as framer_mod
+from hopcap import stamps as stamps_mod
 from hopcap.associate import AssociationResult, associate
 from hopcap.export import write_bundle
 from hopcap.hopctrl import HopController, HopCtrlRegs
@@ -168,6 +169,7 @@ def run_live(cfg: RunConfig, c: Components) -> RunReport:
     receiver_started = False
     stager_enabled = False
     edges = None
+    tb_armed: dict = {}
     try:
         hc.program(
             plan,
@@ -175,7 +177,7 @@ def run_live(cfg: RunConfig, c: Components) -> RunReport:
             sequence_mode=cfg.sequence_mode,
             drain_timeout_ticks=cfg.hopctrl_drain_timeout_ticks,
         )
-        framer_mod.configure(c.framer, cfg.framer)
+        tb_armed = framer_mod.configure(c.framer, cfg.framer, sleep=c.sleep)
         c.receiver.start()
         receiver_started = True
         tick.park_trigger_low(lead_ticks=max(tick_info["time_tick_hz"] // 100, 4 * rtt))
@@ -225,6 +227,7 @@ def run_live(cfg: RunConfig, c: Components) -> RunReport:
     hc_after = hc.wait_drained(expected_events=hc_before.epoch + executed, sleep=c.sleep)
     framer_mod.disable(c.framer)
     framer_after = framer_mod.counters(c.framer)
+    tb_after = framer_mod.time_base_state(c.framer) if cfg.framer.time_base else None
     rx_summary = c.receiver.stop()
     hc.disable()
     host_after = c.host_counters() if c.host_counters else {}
@@ -245,6 +248,11 @@ def run_live(cfg: RunConfig, c: Components) -> RunReport:
         epoch_base=hc_before.epoch,
         expected_peer=cfg.expected_peer,
         freq_tolerance_hz=cfg.freq_tolerance_hz,
+    )
+    q32 = (
+        tb_armed["after_arm"]["ps_per_sample_q32"]
+        if tb_armed
+        else stamps_mod.q32_for_rate(cfg.sample_rate_hz)
     )
     counters = {
         "framer_before": framer_before,
@@ -271,6 +279,16 @@ def run_live(cfg: RunConfig, c: Components) -> RunReport:
             "after": hc_after.as_dict(),
         },
         "edges": [vars(e) for e in edges],
+        "time_base": {
+            "armed": tb_armed,
+            "after": tb_after,
+            "stamps": stamps_mod.check(
+                records, ps_per_sample_q32=q32, expected_peer=cfg.expected_peer
+            ),
+            "hop_spacing_residual_ps": stamps_mod.hop_spacing_residuals(
+                result.hops, tick_hz=compiled.tick_hz
+            ),
+        },
     }
     write_bundle(
         out_dir,

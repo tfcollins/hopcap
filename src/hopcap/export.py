@@ -154,7 +154,9 @@ def write_bundle(
                 "mapped_to_vrt": False,
             },
             "vrt": {
-                "description": "framer timestamp (vrt49_time_base), TSI=UTC TSF=real-time ps",
+                "description": "framer timestamp (vrt49_time_base, armed by hopcap), TSI=UTC "
+                "TSF=real-time ps: seconds are host UTC at arm (+/-1 s), the sub-second phase is "
+                "the selected PPS (Corundum's free-running PTP PPS by default), not GNSS",
                 "mapped_to_tick": False,
             },
             "host_monotonic_ns": {"description": "receiver arrival clock (CLOCK_MONOTONIC)"},

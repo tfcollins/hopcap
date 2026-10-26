@@ -114,6 +114,14 @@ def test_run_live_produces_a_verified_bundle_with_every_hop_ok(tmp_path):
     assert r.returncode == 0, r.stdout + r.stderr
     # framer counters are taken before and after, and the framer was enabled for the run
     assert ("v49_enable", "1") in framer.writes
+    # the time base was armed before the stream started, and the run's stamps were judged
+    tb = report.manifest["time_base"]
+    assert tb["armed"]["after_arm"]["lock_state"] == "locked"
+    assert framer.writes.index(("v49_tb_mode", "3")) < framer.writes.index(("v49_enable", "1"))
+    assert tb["after"]["lock_state"] == "locked" and tb["after"]["missed"] == 0
+    assert tb["stamps"]["zero_stamps"] == 0 and tb["stamps"]["step_errors"] == 0
+    assert tb["stamps"]["steps_checked"] > 0
+    assert len(tb["hop_spacing_residual_ps"]) == 3
 
 
 def test_run_live_fails_closed_when_hop_controller_id_is_wrong(tmp_path):
