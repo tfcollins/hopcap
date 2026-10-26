@@ -1,4 +1,4 @@
-# STATUS — 2026-10-25 — END TO END on tron with real VRT timestamps: Tick→FHM→hop controller→Context→QSFP→host captures tagged with hop frequency, sample-exact timestamps
+# STATUS — 2026-10-26 — END TO END on tron with real VRT timestamps: Tick→FHM→hop controller→Context→QSFP→host captures tagged with hop frequency, sample-exact timestamps
 
 Plan: `docs/superpowers/specs/2026-10-23-hopcap-design.md`. Ledger of rulings in the commit history.
 
@@ -72,7 +72,13 @@ Every VRT timestamp up to run 7 was 0: vrt49's overlay boots the framer's PPS ti
 and hopcap never enabled it. `framer.configure()` now arms it (`ee31887`) and `hopcap.stamps`
 checks every in-capture step. Run `tsfix-20261025-2130`: 4/4 hardware tests, 5/5 hops `ok`,
 3,410/3,410 steps sample-exact, 0 zero stamps, lock held, 0 NIC loss. tron no longer boots from
-SD; the launcher defaults to JTAG boot (`147bc66`). Report: `docs/reports/2026-10-25-tron-vrt-timestamps.md`.
+SD; JTAG boot added (`147bc66`). Report: `docs/reports/2026-10-25-tron-vrt-timestamps.md`.
+
+## Boot mode follows the rig (2026-10-26)
+`--boot auto` (the default in the wrapper, the example launcher and `hw-test.yml`) reads tron's
+`boot-strategy` place tag: `BootZynqMPJTAG` → JTAG (current), `BootFPGASoC` → SD. An unknown or
+unreadable tag stops the run before staging; an explicit `--boot` overrides it with a warning.
+`board-session.json` records `mode_source`. Unit-tested only; no hardware run since this change.
 
 ## Not done
 - Hard-fail table lives in `tests/hardware/test_hw_hopcap.py`.

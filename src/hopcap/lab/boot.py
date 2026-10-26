@@ -1,15 +1,17 @@
 # SPDX-License-Identifier: LGPL-2.1-or-later
 # Adapted from vrt49 tests/integration/conftest.py (corundum_shell fixture, LGPL-2.1-or-later).
-"""Boot tron with exact artifacts: JTAG (the default: PL + U-Boot over JTAG, test kernel/DTB
-staged beside stock; tron is JTAG-strapped since 2026-10-25) or SD-strapped (BOOT.BIN+Image+
-system.dtb replace the stock trio, backed up once and restored at the end).  The
-labgrid-dependent parts import lazily; the command builders and the environment contract are
+"""Boot tron with exact artifacts, by whichever path the board is strapped for: JTAG (PL + U-Boot
+over JTAG, test kernel/DTB staged beside stock) or SD (BOOT.BIN+Image+system.dtb replace the stock
+trio, backed up once and restored at the end).  The mode follows the labgrid place's
+`boot-strategy` tag unless it is set explicitly; tron has been JTAG-strapped since 2026-10-25.
+The labgrid-dependent parts import lazily; the command builders and the environment contract are
 pure and unit-tested.
 
 Environment contract (same names as vrt49 so one operator shell serves both repos):
-  LG_ENV, VRT49_CORUNDUM_BOOT=jtag|sd (default jtag),
+  LG_ENV, VRT49_CORUNDUM_BOOT=auto|jtag|sd (default auto: the place's boot-strategy tag),
   VRT49_CORUNDUM_{BOOT_BIN,KERNEL,DTB}_URL / _SHA256   (BOOT_BIN only for sd)
   VRT49_CORUNDUM_BITSTREAM_REMOTE, VRT49_CORUNDUM_PSU_INIT_REMOTE   (jtag)
+  HOPCAP_BOOT_SOURCE   (optional: why an explicit mode was chosen, recorded in the session)
 """
 
 from __future__ import annotations
@@ -43,15 +45,26 @@ class BootArtifacts:
     boot_bin: tuple[str, str] | None
     bitstream_remote: str | None
     psu_init_remote: str | None
+    mode_source: str = "VRT49_CORUNDUM_BOOT"
 
     @classmethod
-    def from_env(cls, env: Mapping[str, str]) -> BootArtifacts:
+    def from_env(cls, env: Mapping[str, str], *, resolve_mode=None) -> BootArtifacts:
         env_path = env.get("LG_ENV")
         if not env_path:
             raise BootConfigError("LG_ENV is required")
-        mode = env.get("VRT49_CORUNDUM_BOOT") or "jtag"
-        if mode not in ("sd", "jtag"):
-            raise BootConfigError("VRT49_CORUNDUM_BOOT must be sd or jtag")
+        mode = env.get("VRT49_CORUNDUM_BOOT") or "auto"
+        if mode not in ("auto", "sd", "jtag"):
+            raise BootConfigError("VRT49_CORUNDUM_BOOT must be auto, sd or jtag")
+        source = env.get("HOPCAP_BOOT_SOURCE") or "VRT49_CORUNDUM_BOOT"
+        if mode == "auto":
+            from hopcap.lab.preflight import BootModeError, detect_boot_mode
+
+            try:
+                resolved = (resolve_mode or detect_boot_mode)()
+            except BootModeError as exc:
+                raise BootConfigError(str(exc)) from None
+            mode = resolved["mode"]
+            source = f"place tron boot-strategy={resolved['boot_strategy']}"
 
         def pair(prefix: str) -> tuple[str, str] | None:
             url, sha = env.get(f"{prefix}_URL"), env.get(f"{prefix}_SHA256")
@@ -85,6 +98,7 @@ class BootArtifacts:
             boot_bin=boot_bin,
             bitstream_remote=bitstream,
             psu_init_remote=psu,
+            mode_source=source,
         )
 
     @property
@@ -271,6 +285,7 @@ def session_record(session: TronSession) -> dict:
     """Durable record of what the session did to the card (written by the test fixture)."""
     return {
         "mode": session.a.mode,
+        "mode_source": session.a.mode_source,
         "staged": {k: {"url": v[0], "sha256": v[1]} for k, v in session.a.staged_names().items()},
         "stock_sums_before": session.stock_sums_before,
         "staged_sums_live": session.staged_sums,

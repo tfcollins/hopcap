@@ -5,8 +5,8 @@
 Run inside an adi-lg reservation (LG_ENV set).  This is the first thing to do in a lab session:
 it proves the boot path works before any exact-artifact staging, and records the stock
 /boot checksums so a restore can be verified against an independent copy.  The boot mode
-follows VRT49_CORUNDUM_BOOT (default jtag, which also needs VRT49_CORUNDUM_BITSTREAM_REMOTE and
-VRT49_CORUNDUM_PSU_INIT_REMOTE on the tron exporter); set it to sd for an SD-strapped board.
+follows VRT49_CORUNDUM_BOOT (default auto: the place's boot-strategy tag); jtag also needs
+VRT49_CORUNDUM_BITSTREAM_REMOTE and VRT49_CORUNDUM_PSU_INIT_REMOTE on the tron exporter.
 
   adi-lg request --part adrv9009zu11eg --carrier adrv2crr-fmc --mode reserve --wait 600 \
     --run 'python3 scripts/tron_probe.py --out probe.json'
@@ -35,7 +35,7 @@ def main() -> int:
             del env[k]  # probe never stages
     artifacts = BootArtifacts.from_env(env)
     session = TronSession(artifacts)
-    report: dict = {"mode": artifacts.mode}
+    report: dict = {"mode": artifacts.mode, "mode_source": artifacts.mode_source}
     try:
         shell = session.boot_exact()
         for key, cmd in {

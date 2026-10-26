@@ -5,14 +5,16 @@
 #   scripts/run-tron-hopcap.sh --artifacts ~/hopcap-artifacts/boot-attempt3 --url http://10.0.0.71:8749/boot-attempt3 \
 #                              --out ~/hopcap-artifacts/run-<stamp> [--plan examples/plans/band-2400-2500-4slot.json] \
 #                              [--nm-qsfp vrt49-qsfp --nm-sfp vrt49-sfp] [--python ~/hopcap-venv/bin/python]
-#                              [--boot jtag|sd] [--xsa system_top.xsa]
+#                              [--boot auto|jtag|sd] [--xsa system_top.xsa]
 #
-# --boot jtag (default; tron is JTAG-strapped since 2026-10-25): the PL bitstream and psu_init.tcl
-# come from --xsa (default: system_top.xsa in the artifact set), the XSA of the build that produced
-# the artifacts. They are copied to the tron exporter for the session, and the kernel/DTB are
-# staged beside the stock files, as vrt49's Corundum CI does.
-# --boot sd replaces the SD card's BOOT.BIN/Image/system.dtb and power-cycles into them; it needs
-# the board strapped for SD boot.
+# --boot auto (default) follows the labgrid place's boot-strategy tag, the lab's record of how tron
+# is strapped: BootZynqMPJTAG -> jtag (the setup since 2026-10-25), BootFPGASoC -> sd. An explicit
+# --boot wins over the tag, with a warning when they disagree.
+# jtag: the PL bitstream and psu_init.tcl come from --xsa (default: system_top.xsa in the artifact
+# set), the XSA of the build that produced the artifacts. They are copied to the tron exporter for
+# the session, and the kernel/DTB are staged beside the stock files, as vrt49's Corundum CI does.
+# sd: replaces the SD card's BOOT.BIN/Image/system.dtb and power-cycles into them; it needs the
+# board strapped for SD boot.
 #
 # Derives the VRT49_CORUNDUM_*_URL/_SHA256 variables from the artifact directory's SHA256SUMS,
 # brings the QSFP receiver profile up (and the SFP one down, they share 192.0.2.2) for the
@@ -22,7 +24,7 @@
 set -euo pipefail
 here=$(cd "$(dirname "$0")/.." && pwd)
 artifacts=""; url=""; out=""; plan="examples/plans/band-2400-2500-4slot.json"
-nm_qsfp=""; nm_sfp=""; py=python3; wait_s=900; boot=jtag; xsa=""; exporter=tron.local
+nm_qsfp=""; nm_sfp=""; py=python3; wait_s=900; boot=auto; xsa=""; exporter=tron.local
 while [ $# -gt 0 ]; do
   case "$1" in
     --artifacts) artifacts=$2; shift 2 ;;
@@ -35,12 +37,26 @@ while [ $# -gt 0 ]; do
     --wait) wait_s=$2; shift 2 ;;
     --boot) boot=$2; shift 2 ;;
     --xsa) xsa=$2; shift 2 ;;
-    -h|--help) sed -n 2,20p "$0"; exit 0 ;;
+    -h|--help) sed -n 2,22p "$0"; exit 0 ;;
     *) echo "unknown arg $1" >&2; exit 2 ;;
   esac
 done
 test -n "$artifacts" -a -n "$url" -a -n "$out" || { echo "--artifacts, --url and --out are required" >&2; exit 2; }
-case "$boot" in sd|jtag) ;; *) echo "--boot must be sd or jtag" >&2; exit 2 ;; esac
+case "$boot" in auto|sd|jtag) ;; *) echo "--boot must be auto, jtag or sd" >&2; exit 2 ;; esac
+# "<mode> <boot-strategy>" from the place tag; empty when labgrid can't say (auto prints why).
+boot_tag() { PYTHONPATH="$here/src" "$py" -m hopcap.lab.preflight --boot-mode; }
+if [ "$boot" = auto ]; then
+  tag=$(boot_tag) || tag=""
+  test -n "$tag" || { echo "--boot auto: tron's boot-strategy tag is unreadable; pass --boot jtag or --boot sd" >&2; exit 2; }
+  boot=${tag%% *}; boot_source="place tron boot-strategy=${tag#* }"
+else
+  tag=$(boot_tag 2>/dev/null) || tag=""
+  boot_source="--boot $boot"
+  if [ -n "$tag" ] && [ "${tag%% *}" != "$boot" ]; then
+    echo "WARNING: --boot $boot overrides place tron boot-strategy=${tag#* } (which selects ${tag%% *})" >&2
+  fi
+fi
+echo "boot: $boot ($boot_source)"
 if [ "$boot" = jtag ]; then
   if [ -z "$xsa" ] && [ -f "$artifacts/system_top.xsa" ]; then xsa=$artifacts/system_top.xsa; fi
   test -n "$xsa" || { echo "--boot jtag needs --xsa (no system_top.xsa in $artifacts)" >&2; exit 2; }
@@ -53,7 +69,7 @@ for f in BOOT.BIN Image system.dtb; do
   test -n "$(sha $f)" || { echo "$f missing from $sums" >&2; exit 2; }
   curl -sf -o /dev/null "$url/$f" || { echo "$url/$f not reachable" >&2; exit 2; }
 done
-export VRT49_CORUNDUM_BOOT=$boot VRT49_PHYSICAL_PORT=qsfp
+export VRT49_CORUNDUM_BOOT=$boot HOPCAP_BOOT_SOURCE="$boot_source" VRT49_PHYSICAL_PORT=qsfp
 export VRT49_CORUNDUM_BOOT_BIN_URL="$url/BOOT.BIN" VRT49_CORUNDUM_BOOT_BIN_SHA256="$(sha BOOT.BIN)"
 export VRT49_CORUNDUM_KERNEL_URL="$url/Image" VRT49_CORUNDUM_KERNEL_SHA256="$(sha Image)"
 export VRT49_CORUNDUM_DTB_URL="$url/system.dtb" VRT49_CORUNDUM_DTB_SHA256="$(sha system.dtb)"

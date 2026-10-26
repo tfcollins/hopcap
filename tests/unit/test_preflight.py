@@ -3,9 +3,27 @@
 
 from __future__ import annotations
 
+import os
+import sys
 from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
 
 from hopcap.lab import preflight
+
+# Shape of `labgrid-client -p tron show`: the resource params after the place section carry the
+# Home Assistant bearer token, which must never reach any output.
+SHOW = (
+    "Place 'tron':\n"
+    "  comment: ADRV9009-ZU11EG (dual Talise) on ADRV2CRR-FMC (JTAG boot via tron exporter; no SD mux)\n"
+    "  tags: board-location=tron, boot-strategy={strategy}, carrier=adrv2crr-fmc, "
+    "daughter-board=adrv9009zu11eg, runner=hw-nemo\n"
+    "  matches:\n    tron/tlab/HomeAssistantOutlet/HomeAssistantOutlet\n"
+    "  acquired: None\n"
+    "Matching resource 'HomeAssistantOutlet' (tron/tlab/HomeAssistantOutlet/HomeAssistantOutlet):\n"
+    "  {{'params': {{'entity_id': 'switch.x', 'token': 'SECRET-HA-TOKEN'}}}}\n"
+)
 
 
 def fake_net(tmp_path: Path, *, mac="64:9d:99:6f:a9:6a", driver="i40e", operstate="up") -> Path:
@@ -88,3 +106,87 @@ def test_summary_is_ok_only_when_all_sections_ok():
     assert preflight.summarize(sections)["ok"]
     sections["lock"]["free"] = False
     assert not preflight.summarize(sections)["ok"]
+
+
+def test_boot_mode_follows_the_place_boot_strategy_tag():
+    assert preflight.boot_mode_from_show(SHOW.format(strategy="BootZynqMPJTAG")) == {
+        "mode": "jtag",
+        "boot_strategy": "BootZynqMPJTAG",
+    }
+    assert preflight.boot_mode_from_show(SHOW.format(strategy="BootFPGASoC")) == {
+        "mode": "sd",
+        "boot_strategy": "BootFPGASoC",
+    }
+
+
+def test_boot_mode_fails_closed_on_an_unknown_or_missing_tag_or_another_place():
+    with pytest.raises(preflight.BootModeError, match="--boot") as e:
+        preflight.boot_mode_from_show(SHOW.format(strategy="BootFabric"))
+    assert "BootFabric" in str(e.value) and "SECRET" not in str(e.value)
+    missing = SHOW.format(strategy="x").replace("boot-strategy=x, ", "")
+    with pytest.raises(preflight.BootModeError, match="no boot-strategy tag"):
+        preflight.boot_mode_from_show(missing)
+    with pytest.raises(preflight.BootModeError, match="tron"):
+        preflight.boot_mode_from_show(
+            SHOW.format(strategy="BootZynqMPJTAG").replace("'tron'", "'mini2'")
+        )
+    with pytest.raises(preflight.BootModeError):
+        preflight.boot_mode_from_show("")
+
+
+def test_validate_place_reports_the_boot_mode_without_gating_on_it():
+    r = preflight.validate_place(SHOW.format(strategy="BootFPGASoC"))
+    assert r["ok"] and r["boot_strategy"] == "BootFPGASoC" and r["boot_mode"] == "sd"
+    r = preflight.validate_place(SHOW.format(strategy="BootFabric"))
+    assert r["ok"] and r["boot_mode"] is None
+    assert "SECRET" not in repr(r)
+
+
+def test_detect_boot_mode_strips_lg_vars_and_finds_the_client_beside_python(tmp_path, monkeypatch):
+    for k in ("LG_ENV", "LG_STATE", "LG_PLACE"):
+        monkeypatch.setenv(k, "set-by-a-reservation")
+    (tmp_path / "bin").mkdir()
+    client = tmp_path / "bin/labgrid-client"
+    client.write_text("#!/bin/sh\n")
+    client.chmod(0o755)
+    monkeypatch.setattr(preflight.shutil, "which", lambda _name: None)
+    monkeypatch.setattr(sys, "executable", str(tmp_path / "bin/python"))
+    calls = []
+
+    def run(argv, **kw):
+        calls.append((argv, kw))
+        return SimpleNamespace(returncode=0, stdout=SHOW.format(strategy="BootZynqMPJTAG"))
+
+    assert preflight.detect_boot_mode(run=run)["mode"] == "jtag"
+    argv, kw = calls[0]
+    assert argv == [str(client), "-p", "tron", "show"]
+    assert kw["env"]["LG_COORDINATOR"] == "10.0.0.41:20408"
+    assert not [k for k in kw["env"] if k.startswith("LG_") and k != "LG_COORDINATOR"], (
+        "LG_ENV/LG_STATE can activate a strategy even for `show`"
+    )
+    assert os.environ["LG_ENV"] == "set-by-a-reservation", "caller environment untouched"
+
+    def failing(argv, **kw):
+        return SimpleNamespace(returncode=1, stdout="")
+
+    with pytest.raises(preflight.BootModeError, match="show failed"):
+        preflight.detect_boot_mode(run=failing)
+
+
+def test_boot_mode_cli_prints_only_the_mode_and_the_tag(monkeypatch, capsys):
+    monkeypatch.setattr(preflight, "find_labgrid_client", lambda: "labgrid-client")
+
+    def run_with(strategy):
+        def run(argv, **kw):
+            return SimpleNamespace(returncode=0, stdout=SHOW.format(strategy=strategy))
+
+        monkeypatch.setattr(preflight.subprocess, "run", run)
+
+    run_with("BootZynqMPJTAG")
+    assert preflight.main(["--boot-mode"]) == 0
+    out = capsys.readouterr()
+    assert out.out == "jtag BootZynqMPJTAG\n" and "SECRET" not in out.out + out.err
+    run_with("BootFabric")
+    assert preflight.main(["--boot-mode"]) == 2
+    out = capsys.readouterr()
+    assert out.out == "" and "--boot" in out.err and "SECRET" not in out.err

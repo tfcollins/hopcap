@@ -4,10 +4,10 @@ on:
   workflow_dispatch:
     inputs:
       boot:
-        description: "jtag (PL + psu_init from the XSA over JTAG) or sd (BOOT.BIN on the SD card)"
+        description: "auto (tron's boot-strategy place tag), jtag (PL + psu_init from the XSA over JTAG) or sd (BOOT.BIN on the SD card)"
         type: choice
-        options: [jtag, sd]
-        default: jtag
+        options: [auto, jtag, sd]
+        default: auto
       xsa_url: { description: "system_top.xsa URL (jtag)", required: false, type: string }
       xsa_sha256: { description: "system_top.xsa SHA-256 (jtag)", required: false, type: string }
       boot_bin_url: { description: "BOOT.BIN URL (sd)", required: false, type: string }
@@ -45,7 +45,6 @@ jobs:
     runs-on: [self-hosted, hw-nemo]
     timeout-minutes: 90
     env:
-      VRT49_CORUNDUM_BOOT: ${{ inputs.boot }}
       VRT49_PHYSICAL_PORT: qsfp
       VRT49_CORUNDUM_BOOT_BIN_URL: ${{ inputs.boot_bin_url }}
       VRT49_CORUNDUM_BOOT_BIN_SHA256: ${{ inputs.boot_bin_sha256 }}
@@ -69,8 +68,24 @@ jobs:
           uv venv .venv-hw
           uv pip install --python .venv-hw/bin/python -e third_party/tick -e ".[test,hardware,lab]" \
             "labgrid-plugins @ git+https://github.com/tfcollins/labgrid-plugins@$(cat labgrid-plugins.lock)"
+      - name: Resolve the boot mode
+        env:
+          BOOT: ${{ inputs.boot }}
+        run: |
+          set -euo pipefail
+          if [ "$BOOT" = auto ]; then
+            tag=$(.venv-hw/bin/python -m hopcap.lab.preflight --boot-mode)
+            mode=${tag%% *}; source="place tron boot-strategy=${tag#* }"
+          else
+            mode=$BOOT; source="workflow input boot=$BOOT"
+          fi
+          echo "boot: $mode ($source)"
+          {
+            echo "VRT49_CORUNDUM_BOOT=$mode"
+            echo "HOPCAP_BOOT_SOURCE=$source"
+          } >> "$GITHUB_ENV"
       - name: Stage the JTAG boot inputs on the tron exporter
-        if: inputs.boot == 'jtag'
+        if: env.VRT49_CORUNDUM_BOOT == 'jtag'
         env:
           XSA_URL: ${{ inputs.xsa_url }}
           XSA_SHA256: ${{ inputs.xsa_sha256 }}

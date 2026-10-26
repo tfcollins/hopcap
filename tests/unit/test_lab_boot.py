@@ -184,13 +184,69 @@ def test_staged_sums_command_hashes_exactly_the_staged_names():
     )
 
 
-def test_boot_mode_defaults_to_jtag():
-    env = {
-        "LG_ENV": "/tmp/tron.yaml",
-        "VRT49_CORUNDUM_BITSTREAM_REMOTE": "/tmp/j/system_top.bit",
-        "VRT49_CORUNDUM_PSU_INIT_REMOTE": "/tmp/j/psu_init.tcl",
-    }
-    assert boot.BootArtifacts.from_env(env).mode == "jtag"
+JTAG_PL = {
+    "LG_ENV": "/tmp/tron.yaml",
+    "VRT49_CORUNDUM_BITSTREAM_REMOTE": "/tmp/j/system_top.bit",
+    "VRT49_CORUNDUM_PSU_INIT_REMOTE": "/tmp/j/psu_init.tcl",
+}
+
+
+def test_boot_mode_defaults_to_the_place_tag():
+    seen = []
+
+    def resolve():
+        seen.append(1)
+        return {"mode": "jtag", "boot_strategy": "BootZynqMPJTAG"}
+
+    a = boot.BootArtifacts.from_env(JTAG_PL, resolve_mode=resolve)
+    assert seen and a.mode == "jtag"
+    assert a.mode_source == "place tron boot-strategy=BootZynqMPJTAG"
+    a = boot.BootArtifacts.from_env(
+        {"LG_ENV": "/x", "VRT49_CORUNDUM_BOOT": "auto"},
+        resolve_mode=lambda: {"mode": "sd", "boot_strategy": "BootFPGASoC"},
+    )
+    assert a.mode == "sd" and a.mode_source == "place tron boot-strategy=BootFPGASoC"
+    env = dict(JTAG_PL)
     del env["VRT49_CORUNDUM_PSU_INIT_REMOTE"]
     with pytest.raises(boot.BootConfigError, match="PSU_INIT"):
-        boot.BootArtifacts.from_env(env)
+        boot.BootArtifacts.from_env(env, resolve_mode=resolve)
+
+
+def test_explicit_boot_mode_never_queries_the_place():
+    def resolve():
+        raise AssertionError("explicit mode must not query the place")
+
+    a = boot.BootArtifacts.from_env(
+        {**JTAG_PL, "VRT49_CORUNDUM_BOOT": "jtag"}, resolve_mode=resolve
+    )
+    assert a.mode == "jtag" and a.mode_source == "VRT49_CORUNDUM_BOOT"
+    a = boot.BootArtifacts.from_env(
+        {
+            **JTAG_PL,
+            "VRT49_CORUNDUM_BOOT": "jtag",
+            "HOPCAP_BOOT_SOURCE": "place tron boot-strategy=BootZynqMPJTAG",
+        },
+        resolve_mode=resolve,
+    )
+    assert a.mode_source == "place tron boot-strategy=BootZynqMPJTAG", "the wrapper resolved it"
+    with pytest.raises(boot.BootConfigError, match="auto, sd or jtag"):
+        boot.BootArtifacts.from_env({**JTAG_PL, "VRT49_CORUNDUM_BOOT": "usb"}, resolve_mode=resolve)
+
+
+def test_an_unreadable_place_tag_is_a_boot_config_error():
+    from hopcap.lab.preflight import BootModeError
+
+    def resolve():
+        raise BootModeError("place tron has no boot-strategy tag; pass --boot jtag or --boot sd")
+
+    with pytest.raises(boot.BootConfigError, match="boot-strategy"):
+        boot.BootArtifacts.from_env(JTAG_PL, resolve_mode=resolve)
+
+
+def test_session_record_says_why_the_mode_ran():
+    a = boot.BootArtifacts.from_env(
+        JTAG_PL, resolve_mode=lambda: {"mode": "jtag", "boot_strategy": "BootZynqMPJTAG"}
+    )
+    rec = boot.session_record(boot.TronSession(a, log=lambda _m: None))
+    assert rec["mode"] == "jtag"
+    assert rec["mode_source"] == "place tron boot-strategy=BootZynqMPJTAG"

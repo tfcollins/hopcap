@@ -34,19 +34,21 @@ NODES = (
 REQUIRED_ENV = (
     "HOPCAP_PLAN",
     "HOPCAP_OUT",
-    "VRT49_CORUNDUM_BOOT",
     "VRT49_CORUNDUM_KERNEL_URL",
     "VRT49_CORUNDUM_KERNEL_SHA256",
     "VRT49_CORUNDUM_DTB_URL",
     "VRT49_CORUNDUM_DTB_SHA256",
 )
-# sd: BOOT.BIN replaces the stock trio. jtag: the PL and psu_init are loaded over JTAG from
-# paths on the tron exporter, and the kernel/DTB are staged beside the stock files.
+# VRT49_CORUNDUM_BOOT=auto (or unset) takes the mode from the place's boot-strategy tag before the
+# reservation. sd: BOOT.BIN replaces the stock trio. jtag: the PL and psu_init are loaded over JTAG
+# from paths on the tron exporter, and the kernel/DTB are staged beside the stock files.
 REQUIRED_ENV_BY_BOOT = {
     "sd": ("VRT49_CORUNDUM_BOOT_BIN_URL", "VRT49_CORUNDUM_BOOT_BIN_SHA256"),
     "jtag": ("VRT49_CORUNDUM_BITSTREAM_REMOTE", "VRT49_CORUNDUM_PSU_INIT_REMOTE"),
 }
 OPTIONAL_ENV = (
+    "VRT49_CORUNDUM_BOOT",
+    "HOPCAP_BOOT_SOURCE",
     "HOPCAP_RX_INTERFACE",
     "HOPCAP_RX_CPU",
     "HOPCAP_BIND",
@@ -103,6 +105,20 @@ def validate_environment(env) -> None:
             )
 
 
+def resolve_boot(env, *, detect=None) -> None:
+    """Pin VRT49_CORUNDUM_BOOT=auto (or unset) to the place tag's mode, in place."""
+    if env.get("VRT49_CORUNDUM_BOOT") not in (None, "", "auto"):
+        return
+    from hopcap.lab.preflight import BootModeError, detect_boot_mode
+
+    try:
+        r = (detect or detect_boot_mode)()
+    except BootModeError as exc:
+        raise ValueError(str(exc)) from None
+    env["VRT49_CORUNDUM_BOOT"] = r["mode"]
+    env["HOPCAP_BOOT_SOURCE"] = f"place tron boot-strategy={r['boot_strategy']}"
+
+
 def require_env(env) -> None:
     by_boot = REQUIRED_ENV_BY_BOOT.get(env.get("VRT49_CORUNDUM_BOOT", ""), ())
     missing = [k for k in (*REQUIRED_ENV, *by_boot) if not env.get(k)]
@@ -151,6 +167,10 @@ def execute(args, junit: Path, request: list[str]) -> int:
         if shutil.which(tool) is None:
             raise ValueError(f"{tool} not found on PATH")
     validate_environment(os.environ)
+    resolve_boot(os.environ)
+    print(
+        f"boot: {os.environ['VRT49_CORUNDUM_BOOT']} ({os.environ.get('HOPCAP_BOOT_SOURCE', 'VRT49_CORUNDUM_BOOT')})"
+    )
     require_env(os.environ)
     env = dict(os.environ, LG_COORDINATOR=COORDINATOR, ADI_LG_COORDINATOR=COORDINATOR)
     # Preflight BEFORE taking the shared lock: it checks that the lock is free.
