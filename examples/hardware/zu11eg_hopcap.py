@@ -35,13 +35,17 @@ REQUIRED_ENV = (
     "HOPCAP_PLAN",
     "HOPCAP_OUT",
     "VRT49_CORUNDUM_BOOT",
-    "VRT49_CORUNDUM_BOOT_BIN_URL",
-    "VRT49_CORUNDUM_BOOT_BIN_SHA256",
     "VRT49_CORUNDUM_KERNEL_URL",
     "VRT49_CORUNDUM_KERNEL_SHA256",
     "VRT49_CORUNDUM_DTB_URL",
     "VRT49_CORUNDUM_DTB_SHA256",
 )
+# sd: BOOT.BIN replaces the stock trio. jtag: the PL and psu_init are loaded over JTAG from
+# paths on the tron exporter, and the kernel/DTB are staged beside the stock files.
+REQUIRED_ENV_BY_BOOT = {
+    "sd": ("VRT49_CORUNDUM_BOOT_BIN_URL", "VRT49_CORUNDUM_BOOT_BIN_SHA256"),
+    "jtag": ("VRT49_CORUNDUM_BITSTREAM_REMOTE", "VRT49_CORUNDUM_PSU_INIT_REMOTE"),
+}
 OPTIONAL_ENV = (
     "HOPCAP_RX_INTERFACE",
     "HOPCAP_RX_CPU",
@@ -100,7 +104,8 @@ def validate_environment(env) -> None:
 
 
 def require_env(env) -> None:
-    missing = [k for k in REQUIRED_ENV if not env.get(k)]
+    by_boot = REQUIRED_ENV_BY_BOOT.get(env.get("VRT49_CORUNDUM_BOOT", ""), ())
+    missing = [k for k in (*REQUIRED_ENV, *by_boot) if not env.get(k)]
     if missing:
         raise ValueError(f"missing environment: {', '.join(missing)}")
 
@@ -208,6 +213,7 @@ def main(argv=None) -> int:
                 "lock": str(LOCK),
                 "coordinator": COORDINATOR,
                 "required_env": list(REQUIRED_ENV),
+                "required_env_by_boot": {k: list(v) for k, v in REQUIRED_ENV_BY_BOOT.items()},
                 "optional_env": list(OPTIONAL_ENV),
             },
             sys.stdout,

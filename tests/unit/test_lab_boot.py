@@ -166,3 +166,19 @@ def test_a_failed_sd_boot_still_powers_the_board_off(tmp_path):
     assert strategy.power.on_ is True
     session.restore_and_power_off()
     assert strategy.power.on_ is False, "board left powered after a failed boot"
+
+
+def test_staged_sums_command_hashes_exactly_the_staged_names():
+    jtag = boot.BootArtifacts(
+        env_path="/x",
+        mode="jtag",
+        kernel=("http://x/Image", SHA),
+        dtb=("http://x/system.dtb", SHA),
+        boot_bin=None,
+        bitstream_remote="/tmp/j/system_top.bit",
+        psu_init_remote="/tmp/j/psu_init.tcl",
+    )
+    assert (
+        boot.staged_sums_command(jtag.staged_names())
+        == "sha256sum /boot/Image.vrt49.test /boot/system.vrt49.dtb"
+    )

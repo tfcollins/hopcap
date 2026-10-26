@@ -77,3 +77,79 @@ def test_hardware_suite_collects_without_a_board():
     )
     assert r.returncode == 0, r.stdout + r.stderr
     assert "test_hop_capture_plan" in r.stdout and "test_boot_and_identity" in r.stdout
+
+
+BASE_ENV = {
+    "HOPCAP_PLAN": "p.json",
+    "HOPCAP_OUT": "/out",
+    "VRT49_CORUNDUM_KERNEL_URL": "http://x/Image",
+    "VRT49_CORUNDUM_KERNEL_SHA256": "a" * 64,
+    "VRT49_CORUNDUM_DTB_URL": "http://x/system.dtb",
+    "VRT49_CORUNDUM_DTB_SHA256": "a" * 64,
+}
+
+
+def test_sd_boot_needs_boot_bin_and_jtag_boot_needs_the_pl_inputs():
+    sd = dict(BASE_ENV, VRT49_CORUNDUM_BOOT="sd")
+    with pytest.raises(ValueError, match="BOOT_BIN_URL"):
+        launcher.require_env(sd)
+    launcher.require_env(
+        dict(sd, VRT49_CORUNDUM_BOOT_BIN_URL="http://x/B", VRT49_CORUNDUM_BOOT_BIN_SHA256="a" * 64)
+    )
+    jtag = dict(BASE_ENV, VRT49_CORUNDUM_BOOT="jtag")
+    with pytest.raises(ValueError, match=r"BITSTREAM_REMOTE.*PSU_INIT_REMOTE"):
+        launcher.require_env(jtag)
+    launcher.require_env(
+        dict(
+            jtag,
+            VRT49_CORUNDUM_BITSTREAM_REMOTE="/tmp/j/system_top.bit",
+            VRT49_CORUNDUM_PSU_INIT_REMOTE="/tmp/j/psu_init.tcl",
+        )
+    )
+
+
+def _run_wrapper(*args):
+    return subprocess.run(
+        ["bash", str(ROOT / "scripts/run-tron-hopcap.sh"), *args],
+        capture_output=True,
+        text=True,
+    )
+
+
+def test_operator_wrapper_jtag_boot_needs_an_xsa_and_rejects_unknown_modes(tmp_path):
+    base = ["--artifacts", str(tmp_path), "--url", "http://x", "--out", str(tmp_path / "o")]
+    r = _run_wrapper(*base, "--boot", "jtag")
+    assert r.returncode == 2 and "--boot jtag needs --xsa" in r.stderr
+    r = _run_wrapper(*base, "--boot", "usb")
+    assert r.returncode == 2 and "--boot must be sd or jtag" in r.stderr
+
+
+def test_jtag_inputs_come_from_the_xsa(tmp_path):
+    import zipfile
+
+    xsa = tmp_path / "system_top.xsa"
+    with zipfile.ZipFile(xsa, "w") as z:
+        z.writestr("system_top.bit", b"BIT")
+        z.writestr("psu_init.tcl", "proc psu_init {} {}\n")
+    out = tmp_path / "jtag"
+    r = subprocess.run(
+        [sys.executable, str(ROOT / "scripts/extract_jtag_inputs.py"), str(xsa), str(out)],
+        capture_output=True,
+        text=True,
+    )
+    assert r.returncode == 0, r.stderr
+    assert (out / "system_top.bit").read_bytes() == b"BIT"
+    assert "proc psu_init" in (out / "psu_init.tcl").read_text()
+    sums = r.stdout.split()
+    import hashlib
+
+    assert hashlib.sha256(b"BIT").hexdigest() in sums
+    with zipfile.ZipFile(xsa, "w") as z:
+        z.writestr("system_top.bit", b"BIT")
+        z.writestr("psu_init.tcl", "# empty\n")
+    r = subprocess.run(
+        [sys.executable, str(ROOT / "scripts/extract_jtag_inputs.py"), str(xsa), str(out)],
+        capture_output=True,
+        text=True,
+    )
+    assert r.returncode != 0 and "psu_init" in r.stderr

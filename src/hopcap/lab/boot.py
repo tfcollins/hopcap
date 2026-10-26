@@ -123,6 +123,10 @@ def sd_restore_command() -> str:
     return f"set -e; cp {files} /boot/; sync; rm -rf {stock}; sync"
 
 
+def staged_sums_command(names) -> str:
+    return "sha256sum " + " ".join(shlex.quote(f"/boot/{n}") for n in names)
+
+
 def parse_shell_value(lines: list[str]) -> str:
     return "\n".join(ln for ln in lines if ln.strip()).strip()
 
@@ -230,7 +234,7 @@ class TronSession:
             self.target.cleanup()
             self.target, self.strategy = self._new_target(exact_files=True)
             self.shell = self._boot()
-            live = self._value("sha256sum " + " ".join(f"/boot/{n}" for n in self.a.staged_names()))
+            live = self._value(staged_sums_command(self.a.staged_names()))
             self.staged_sums = live
             for name, (_url, sha) in self.a.staged_names().items():
                 if sha not in live:

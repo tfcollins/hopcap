@@ -3,8 +3,14 @@
 Verify every host fact against `~/dev/infra/HOSTS.md` before use.
 
 - **Board**: ADRV9009-ZU11EG on ADRV2CRR-FMC, labgrid place `tron`, coordinator
-  `10.0.0.41:20408`. Boots from SD through the USB SD mux (`VRT49_CORUNDUM_BOOT=sd`); JTAG
-  (`BootZynqMPJTAG`, `LG_FORCE_LOCAL_XSDB=1` on tron) remains for recovery.
+  `10.0.0.41:20408`. Two boot paths through `scripts/run-tron-hopcap.sh`:
+  - `--boot sd` (default): the SD card's `BOOT.BIN`/`Image`/`system.dtb` are replaced and the
+    board power-cycles into them. Needs the board strapped for SD boot.
+  - `--boot jtag --xsa system_top.xsa`: the PL bitstream and `psu_init.tcl` come from the XSA of
+    the build under test and load over JTAG (`BootZynqMPJTAG`, `LG_FORCE_LOCAL_XSDB=1` on tron);
+    the kernel/DTB are staged beside the stock files as `Image.vrt49.test`/`system.vrt49.dtb`.
+    This is vrt49's Corundum CI path and the one that works on a JTAG-strapped tron (2026-10-25:
+    an SD power-on printed nothing for 300 s while vrt49's JTAG boot passed).
 - **Link**: tron QSFP cage lane 0 ↔ nemo XL710 `enp4s0f0np0` (i40e, MAC `64:9d:99:6f:a9:6a`,
   `192.0.2.2/24`) over a Mellanox MC2210128-003 passive DAC. FPGA source `192.0.2.1:4991`. The
   QSFP GT reference is AD9545 Q1B at 156.25 MHz (not HMC7044 channel 10); the hopcap DTB programs it.

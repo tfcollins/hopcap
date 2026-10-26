@@ -24,7 +24,9 @@ def test_boot_and_identity(board, components):
     assert (
         info["time_tick_hz"] == 100_000_000 and info["queue_depth"] == 16 and info["gpio_capable"]
     )
-    sums = board["shell"].run("sha256sum /boot/BOOT.BIN /boot/Image /boot/system.dtb")
+    from hopcap.lab.boot import staged_sums_command
+
+    sums = board["shell"].run(staged_sums_command(board["artifacts"].staged_names()))
     for name, (_url, sha) in board["artifacts"].staged_names().items():
         assert sha in sums, f"{name} on /boot is not the staged artifact"
     assert "vrt49_framer" in board["shell"].run("cat /sys/bus/iio/devices/*/name")
