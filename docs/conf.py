@@ -6,10 +6,20 @@ project = "hopcap"
 author = "Travis F. Collins"
 release = "0.1.0"
 extensions = ["sphinx.ext.githubpages", "myst_parser", "sphinxcontrib.mermaid", "adi_doctools"]
-mermaid_init_config = {"startOnLoad": False, "deterministicIds": True}
+# Diagrams render at their natural size, shrunk only to fit the column (no fixed 500 px box that
+# scaled the sequence diagram's labels to ~7 px); long sequence messages wrap between lifelines.
+mermaid_init_config = {
+    "startOnLoad": False,
+    "deterministicIds": True,
+    "flowchart": {"useMaxWidth": False},
+    "sequence": {"useMaxWidth": False, "wrap": True},
+    "state": {"useMaxWidth": False},
+}
+mermaid_height = "auto"
 needs_extensions = {"adi_doctools": "0.4.21"}
 html_theme = "cosmic"
 html_static_path = ["_static"]
+html_css_files = ["mermaid.css"]
 exclude_patterns = ["_build", "superpowers"]
 myst_enable_extensions = ["colon_fence", "deflist", "fieldlist"]
 myst_heading_anchors = 3
