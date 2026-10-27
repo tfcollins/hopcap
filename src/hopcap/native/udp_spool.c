@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: LGPL-2.1-or-later
-// Derived from vrt49 tests/integration/sfp_udp_capture.c (commit 00dfea7, LGPL-2.1-or-later).
+// Derived from vrt49 tests/integration/sfp_udp_capture.c (vrt49 main 39d4294, LGPL-2.1-or-later).
 //
 // Full-rate VITA-49 UDP spooler for hopcap.  Every datagram is appended to a spool
 // file with its arrival time (CLOCK_MONOTONIC and CLOCK_REALTIME, ns), peer address

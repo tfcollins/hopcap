@@ -36,6 +36,9 @@ jobs:
           cmake --build build/vrt49 -j
       - name: Compile the UDP spooler with warnings as errors
         run: cc -O2 -Wall -Wextra -Werror -o /tmp/udp_spool src/hopcap/native/udp_spool.c
+      - name: Fetch the vrt49 revisions PROVENANCE.md records
+        # the submodule checkout is shallow at its pin; test_provenance reads other commits
+        run: grep -oE '`[0-9a-f]{40}`' PROVENANCE.md | tr -d '`' | xargs -r git -C third_party/vrt49 fetch -q --depth=1 origin
       - name: Unit tests
         run: pytest -q
       - name: Hardware suite collects without a board
