@@ -1,0 +1,38 @@
+/* Mermaid diagrams draw in the page's theme (sphinxcontrib-mermaid re-renders on a theme switch).
+   cosmic gives every other figure a white panel in dark mode and exempts only flowcharts, which
+   left sequence and state diagrams as light text on white. */
+.body pre.mermaid > svg {
+  background: none !important;
+  width: auto;
+}
+
+/* Mermaid's dark edge labels are #ccc on #585858 (4.4:1); lift the text above 4.5:1, on the page
+   and in the fullscreen viewer. */
+@media (prefers-color-scheme: dark) {
+  body:not(.light) .body pre.mermaid .edgeLabel,
+  body:not(.light) .body pre.mermaid .edgeLabel * {
+    color: #eee !important;
+  }
+}
+body.dark .body pre.mermaid .edgeLabel,
+body.dark .body pre.mermaid .edgeLabel *,
+.mermaid-container-fullscreen.dark-theme .edgeLabel,
+.mermaid-container-fullscreen.dark-theme .edgeLabel * {
+  color: #eee !important;
+}
+
+/* Sequence messages cross the lifelines between their ends; a halo in the background colour
+   keeps them clear. */
+.body pre.mermaid .messageText,
+.mermaid-container-fullscreen .messageText {
+  paint-order: stroke;
+  stroke: var(--bg-color1) !important;
+  stroke-width: 4px !important;
+  stroke-linejoin: round;
+}
+.mermaid-container-fullscreen .messageText {
+  stroke: white !important;
+}
+.mermaid-container-fullscreen.dark-theme .messageText {
+  stroke: #1a1a1a !important;
+}
