@@ -1,6 +1,6 @@
 # hopcap — hard-timed FHM hop, settled capture, hop frequency in VRT49 Context
 
-**Status: in development. Nothing here is hardware-validated yet.**
+**Status: in development. Offline pipeline complete (114 unit tests, 18 cocotb tests); first Vivado build in flight; nothing is hardware-validated yet. See `STATUS.md`.**
 
 Composite example for the ADRV9009-ZU11EG (ADRV2CRR-FMC carrier). It assembles
 [Tick](https://github.com/tfcollins/tick) and [vrt49](https://github.com/tfcollins/vrt49)
@@ -36,7 +36,11 @@ Settle time and capture length are single values for the whole plan.
 ```sh
 git submodule update --init
 pip install -e third_party/tick -e ".[test]"
-pytest -q
+pytest -q                                                   # 114 unit tests
+hopcap plan --plan examples/plans/band-2400-2500-4slot.json --dry-run
+make -C hdl/sim/cocotb TOP=vrt49_fhm_hop_ctrl               # needs hdl/sim/.venv with cocotb 1.9
 ```
 
-See `CLAUDE.md` for the build/test matrix and the design document under `docs/`.
+Start with `docs/example.md` (dataflow and sequence diagrams, state machine, and plots from the first
+tron run). Build and lab flow: `docs/how-to/build.md`, `docs/how-to/tron-nemo-runbook.md`. Design document:
+`docs/superpowers/specs/2026-10-23-hopcap-design.md`. `CLAUDE.md` has the command matrix and invariants.

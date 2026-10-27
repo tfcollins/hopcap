@@ -1,0 +1,44 @@
+// SPDX-License-Identifier: MIT
+/*
+ * hopcap overlay for adrv9009zu11eg_vrt49_corundum (QSFP): the Tick scheduler and the
+ * vrt49_fhm_hop_ctrl block.  Applied with fdtoverlay on top of vrt49's
+ * zynqmp-adrv9009zu11eg-vrt49-control-overlay.dts (framer/deframer nodes).
+ *
+ * Addresses are PS-physical: Tick sits at block-design 0x46000000, which the ZynqMP
+ * +0x40000000 PL->PS aperture maps to 0x86000000 (tick/kernel/dts/*zu11eg*.dtsi); the hop
+ * controller is placed at 0x84AC0000 by hdl/system_bd_fabric_hop.tcl (passed through).
+ * Cell layout follows vrt49's overlay for the same base DTB (/fpga-axi@0: 2 address cells,
+ * 1 size cell) — Tick's own dtsi targets amba_pl with 2/2 cells and cannot be reused here.
+ *
+ * No adrv9009 node change: the driver defaults (fhmGpioPin = 0 -> TAL_GPIO_0, FHM GPIO
+ * trigger mode) are what the validated Tick hop used.
+ */
+/dts-v1/;
+/plugin/;
+
+/ {
+    fragment@0 {
+        target-path = "/fpga-axi@0";
+
+        __overlay__ {
+            #address-cells = <2>;
+            #size-cells = <1>;
+
+            timed-command-scheduler@86000000 {
+                compatible = "adi,axi-timed-command-scheduler-1.0";
+                reg = <0x0 0x86000000 0x1000>;
+                clocks = <&zynqmp_clk 71>;
+                clock-names = "s_axi_aclk";
+                adi,time-tick-hz = <100000000>;
+            };
+
+            fhm-hop-controller@84ac0000 {
+                /* No kernel driver: the host programs it over /dev/mem (hopcap_target.py). */
+                compatible = "nous,vrt49-fhm-hop-controller-1.0";
+                reg = <0x0 0x84ac0000 0x1000>;
+                adi,slot-bits = <3>;
+                adi,event-gpio = "tick gpio_out[0]";
+            };
+        };
+    };
+};

@@ -1,5 +1,91 @@
-# STATUS — 2026-10-23 — repo created
+# STATUS — 2026-10-26 — END TO END on tron with real VRT timestamps: Tick→FHM→hop controller→Context→QSFP→host captures tagged with hop frequency, sample-exact timestamps
 
-Phase 0 of the approved plan (`docs/superpowers/specs/2026-10-23-hopcap-design.md`):
-skeleton, submodules pinned (tick 1b8a0c7, vrt49 eae8aa0 on `test/zu11eg-qsfp-hw`),
-`pins.json` contract test green. Next: Phase 1, `vrt49_fhm_hop_ctrl` RTL under cocotb.
+Plan: `docs/superpowers/specs/2026-10-23-hopcap-design.md`. Ledger of rulings in the commit history.
+
+## Done (tested)
+- `vrt49_fhm_hop_ctrl` RTL: 15 cocotb unit tests + 3 chain tests against the real vrt49 framer
+  (Context before data, byte-exact vs libvrt49, capture window, epoch per hop); Verilator lint clean;
+  mutants (off-by-one window, uncounted superseded, gate-before-accept) all caught.
+- Host: plan compiler (FHM one-behind pipeline), Tick descriptors (replayed through tick.hdl_model),
+  hop-controller programmer (regmap JSON is the single source), VITA 49.2 codec, C spooler + Python
+  receiver, association (never guesses), SigMF/manifest export, run orchestrator, CLI. 114 unit tests.
+- Build: assembler verified on the real pinned ADI tree (e57851ffc; Tick's `patch_system_top()` applies
+  to `system_top_corundum.v`; both vrt49 contract checks pass; 97 files hashed). Kernel + DTB + overlays
+  built on picard: 9/9 fdtget checks (Q1B refclk, framer, Tick @0x86000000, hop ctrl @0x84AC0000).
+- Lab: tron boot/restore, nemo preflight, hardware suite (collects without a board), adi-lg launcher.
+- Docs (Sphinx -W), CI workflows (actionlint clean), DataX example page, HOSTS.md QSFP link.
+
+## Review (2026-10-23)
+Whole-branch review found two production-only defects the fakes masked (pipeline model never
+advanced on hardware; teardown deadlock while the framer floods) and seven Important items; all
+fixed in commit 25f83a4 with red→green tests (125 unit, 19 cocotb). Deferred minors are listed in
+the ledger (`.superpowers/sdd/.../progress.md`, lines `Final: minor (deferred)`).
+
+## Bitstream attempt 2 (2026-10-23, hdl-dev-2, Vivado 2025.1) — BUILT, timing met
+`evidence/bitstream-attempt2/` (local, gitignored): `verify_evidence.py bitstream` OK. 1 h 23 min.
+Routed WNS +0.057 ns, WHS +0.010 ns, 0 failing endpoints; `check_hop_netlist` OK (controller, Tick and
+framer instantiated, fabric nets present, `adrv9009_gpio_00_a = tick_fhm_gpio[0]`).
+bitstream sha256 `fdfa3e783e750ce632b63ea4e49a7852d21c7f42303243a5ee178625c5aa949e`.
+Caveat: built from the pre-review BD fragment (`delete_bd_objs` on the fabric nets, which also
+undrives the framer's legacy PTP inputs). Usable for bring-up; not release-grade.
+
+## Boot set from attempt 2 (2026-10-23, hdl-dev-2) — BUILT and VERIFIED
+`evidence/boot-attempt1-hdl-dev-2/` (local, gitignored; also `hdl-dev-2:/mnt/disk2/scratch/hopcap/boot-attempt1`):
+`verify_evidence.py boot` OK. BOOT.BIN (ATF 2025.1 + ADI u-boot + attempt-2 bitstream via xsct/bootgen),
+Image (ADI 2e89089 with Tick + vrt49 drivers in-tree), system.dtb (Q1B QSFP refclk, framer/deframer,
+Tick @0x86000000, hop ctrl @0x84AC0000), both overlays. 9/9 fdtget checks. SHA-256s in `SHA256SUMS`.
+This trio is what `VRT49_CORUNDUM_BOOT=sd` staging expects; it is ready for a tron bring-up session
+(bring-up only: the bitstream is attempt 2, pre-review fragment).
+
+## Bitstream attempt 3 (2026-10-23, fixed fragment) — BUILT, timing met, release candidate
+`evidence/bitstream-attempt3/`: `verify_evidence.py bitstream` OK. Routed WNS 0.000 ns (met, zero slack),
+WHS +0.008 ns, 0 failing endpoints; `check_hop_netlist` OK. bitstream sha256
+`e77d095f6dc4fd6bd9ea7a418ef9cdf002e8cdaba5aaf5fc7a8c58265cdf2a51`. Vivado BD 41-759 warnings dropped
+from 5 unconnected framer pins (attempt 2, incl. `ptp_tai_seconds_in`/`ptp_sample_counter_in` — the
+review finding) to the 3 the stock vrt49 design already has (`capture_loss_count`, `tx_link_status`,
+`tx_throttled_frame_count`). Workspace `hdl-dev-2:/mnt/disk2/scratch/hopcap/ws-20261023T215508Z`.
+Note the zero-slack WNS: re-check timing on any RTL change.
+
+## Boot set from attempt 3 — BUILT and VERIFIED (release candidate for the first tron run)
+`evidence/boot-attempt3-hdl-dev-2/` and `hdl-dev-2:/mnt/disk2/scratch/hopcap/boot-attempt3`:
+`verify_evidence.py boot` OK, 9/9 DTB checks. Serve this directory over HTTP for
+`VRT49_CORUNDUM_{BOOT_BIN,KERNEL,DTB}_URL/_SHA256` (hashes in its `SHA256SUMS`).
+
+## In flight
+- Nothing. Next step is a lab session on tron (see "Not done").
+
+## First tron run (2026-10-23) — see docs/reports/2026-10-23-tron-first-run.md
+FPGA/radio chain fully working: 5/5 Tick edges at 0-tick skew, Talise readback exactly per the pipeline
+model, hop controller 5 events / 5 captures / 0 superseded, framer 3420 packets 0 drops. Host side:
+0 datagrams spooled — nemo dropped them in TcpExtIPReversePathFilter (XL710 address-less, rp_filter=2).
+**Needs root on nemo:** `sysctl -w net.ipv4.conf.enp4s0f0np0.rp_filter=0` (+ ufw allow 4991/udp on it),
+then rerun `scripts/run-tron-hopcap.sh … --plan examples/plans/band-2400-2500-4slot-slow.json`.
+
+## Run 7 (2026-10-23) — end to end
+After `rp_filter=0`/ufw on nemo: 5/5 hops received with Context RF == Talise readback == planned,
+epochs 1..5, 0-tick skew, FPGA 0 drops; 3/5 captures complete, 2 short by ~90 packets each from XL710
+ring `rx_missed_errors` (178). Plan test fails only the ≥95 % completeness gate. Report:
+`docs/reports/2026-10-23-tron-first-run.md`. Next: `ethtool -G enp4s0f0np0 rx 8160` on nemo (root).
+
+## VRT timestamps (2026-10-25) — fixed, verified on tron
+Every VRT timestamp up to run 7 was 0: vrt49's overlay boots the framer's PPS time base disabled
+and hopcap never enabled it. `framer.configure()` now arms it (`ee31887`) and `hopcap.stamps`
+checks every in-capture step. Run `tsfix-20261025-2130`: 4/4 hardware tests, 5/5 hops `ok`,
+3,410/3,410 steps sample-exact, 0 zero stamps, lock held, 0 NIC loss. tron no longer boots from
+SD; JTAG boot added (`147bc66`). Report: `docs/reports/2026-10-25-tron-vrt-timestamps.md`.
+
+## Boot mode follows the rig (2026-10-26)
+`--boot auto` (the default in the wrapper, the example launcher and `hw-test.yml`) reads tron's
+`boot-mode` place tag (`jtag`|`sd`; tron set to `boot-mode=jtag` on 2026-10-26); with no tag, jtag
+is assumed and recorded as such. `boot-strategy` must stay `BootZynqMPJTAG`: adi-lg renders LG_ENV from it and both paths
+need that driver. A bad tag stops the run before staging; an explicit `--boot` overrides the tag
+with a warning. `board-session.json` records `mode_source`. Unit-tested and resolved read-only
+against the live place (`jtag place tron boot-mode=jtag`); no hardware boot since this change, and the SD path is not re-exercised.
+
+## Not done
+- Hard-fail table lives in `tests/hardware/test_hw_hopcap.py`.
+- The 62.8 µs excess on the priming hop's VRT-vs-Tick spacing is unexplained; no PPS edge has
+  yet fallen inside a capture on hardware.
+- Upstream PRs (vrt49 `VRT_FABRIC_HOP_ENABLE`, Tick `--system-top`); `overlays/patches/` is empty
+  because the assembler currently edits the staged tree directly.
+- Talise settle time is a knob, not a measured figure.

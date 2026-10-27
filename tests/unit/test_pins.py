@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: MIT
 """pins.json is the fail-closed contract for every upstream the composite consumes."""
+
 from __future__ import annotations
 
 import json
@@ -42,4 +43,7 @@ def test_pins_copies_vrt49_platform_artifact_contract(pins):
     zu = artifacts["platforms"]["adrv9009-zu11eg"]
     assert pins["u_boot"]["url"] == zu["u_boot_url"]
     assert pins["u_boot"]["sha256"] == zu["u_boot_sha256"]
-    assert pins["arm_trusted_firmware"]["revision"] == artifacts["arm_trusted_firmware"]["revisions"]["2025.1"]
+    assert (
+        pins["arm_trusted_firmware"]["revision"]
+        == artifacts["arm_trusted_firmware"]["revisions"]["2025.1"]
+    )

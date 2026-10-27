@@ -1,0 +1,11 @@
+{
+  "name": "band-2400-2500-4slot",
+  "description": "Four hops across the default Talise FHM band. Edge 0 primes on 2450 MHz (fhmInitFrequency).",
+  "frequencies_hz": [2410000000, 2440000000, 2470000000, 2490000000],
+  "sample_rate_hz": 245760000,
+  "period_us": 50000,
+  "settle_us": 200,
+  "capture_us": 1000,
+  "pulse_us": 10000,
+  "lead_us": 50000
+}
