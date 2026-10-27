@@ -71,9 +71,12 @@ jobs:
       - name: Controller + framer chain
         run: make -C hdl/sim/cocotb TOP=fhm_hop_chain
       - name: No cocotb failures
+        # cocotb 1.9's results.xml has no failures= attribute: a failed test is a <failure/> child.
         run: |
-          for f in hdl/sim/cocotb/results_*.xml; do
-            grep -q 'failures="0"' "$f" || { echo "failures in $f" >&2; exit 1; }
+          for top in fhm_hop_chain vrt49_fhm_hop_ctrl; do
+            f=hdl/sim/cocotb/results_$top.xml
+            grep -q '<testcase ' "$f" || { echo "no testcases in $f" >&2; exit 1; }
+            if grep -qE '<(failure|error)[ />]' "$f"; then echo "failures in $f" >&2; exit 1; fi
           done
 
   assemble-check:
