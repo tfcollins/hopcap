@@ -1,6 +1,6 @@
 # hopcap — hard-timed FHM hop, settled capture, hop frequency in VRT49 Context
 
-**Status: in development. Offline pipeline complete (114 unit tests, 18 cocotb tests); first Vivado build in flight; nothing is hardware-validated yet. See `STATUS.md`.**
+**Status: end to end on `tron` (2026-10-26): Tick-timed FHM hop, hardware-gated VRT49 capture over QSFP, sample-exact VRT timestamps; nightly HIL. Talise settle time is still a configured knob, not a measurement. See `STATUS.md`.**
 
 Composite example for the ADRV9009-ZU11EG (ADRV2CRR-FMC carrier). It assembles
 [Tick](https://github.com/tfcollins/tick) and [vrt49](https://github.com/tfcollins/vrt49)

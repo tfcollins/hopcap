@@ -1,0 +1,45 @@
+{
+  "schema": 1,
+  "project": "hopcap",
+  "platforms": {
+    "adrv9009-zu11eg": {
+      "carrier": "adrv2crr-fmc",
+      "labgrid_place": "tron",
+      "hdl_release": "hdl_2026_r1",
+      "features": {
+        "fhm-hop": {
+          "status": "validated",
+          "tier": 2,
+          "workflow": "hw-test.yml",
+          "evidence": "https://tfcollins.github.io/hopcap/reports/2026-10-23-tron-first-run.html",
+          "note": "Tick-timed Talise FHM hop with hop frequency and epoch in a hardware Context packet"
+        },
+        "stream-gate": {
+          "status": "validated",
+          "tier": 2,
+          "workflow": "hw-test.yml",
+          "evidence": "https://tfcollins.github.io/hopcap/reports/2026-10-23-tron-first-run.html",
+          "note": "vrt49_fhm_hop_ctrl gates sample admission after a settle delay"
+        },
+        "timestamps": {
+          "status": "validated",
+          "tier": 2,
+          "workflow": "hw-test.yml",
+          "evidence": "https://tfcollins.github.io/hopcap/reports/2026-10-25-tron-vrt-timestamps.html",
+          "note": "sample-exact VRT timestamps on the QSFP path"
+        },
+        "vrt-udp-10g": {
+          "status": "validated",
+          "tier": 2,
+          "workflow": "hw-test.yml",
+          "evidence": "https://tfcollins.github.io/hopcap/reports/2026-10-23-tron-first-run.html",
+          "note": "QSFP lane 0 to the host spooler"
+        },
+        "timed-capture": {
+          "status": "planned",
+          "note": "Talise settle time is a configured knob, not a measurement"
+        }
+      }
+    }
+  }
+}
