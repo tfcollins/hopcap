@@ -26,6 +26,14 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install -e third_party/tick -e ".[test]" "ruff==0.16.1"
+      - name: Check support manifest
+        # support.json feeds the DataX SDR SDK support matrix; the checker
+        # fails closed on claims that exceed their evidence.
+        run: |
+          python -m pip install "git+https://github.com/tfcollins/datax_sdk_sdr@${DATAX_SDK_REV}"
+          datax-support check support.json --repo-root .
+        env:
+          DATAX_SDK_REV: c5e31187d7b36643c144fdc0b53d339fe0c48a2d
       - name: Lint
         run: |
           ruff check src tests scripts examples
