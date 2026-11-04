@@ -85,9 +85,11 @@ def validate_receiver_address(raw: str, interface: str, rp_filter: int | None = 
         note = "weak-host delivery via another interface (receiver rp_filter is 0)"
     elif anywhere:
         note = (
-            f"{RECEIVER_IPV4} is on another interface and {interface} has rp_filter={rp_filter}: the kernel "
-            f"will drop every datagram arriving on {interface}. Fix (root): "
-            f"`sysctl -w net.ipv4.conf.{interface}.rp_filter=0` or `nmcli con up vrt49-qsfp` while the link is up"
+            f"{RECEIVER_IPV4} is on another interface and {interface} has effective rp_filter={rp_filter}: "
+            f"the kernel will drop every datagram arriving on {interface}. The effective value is "
+            f"max(all, {interface}), so fix (root, persist in /etc/sysctl.d): "
+            f"`sysctl -w net.ipv4.conf.all.rp_filter=0 net.ipv4.conf.{interface}.rp_filter=0`, "
+            "or `nmcli con up vrt49-qsfp` while the link is up"
         )
     else:
         note = f"{RECEIVER_IPV4} is not configured on any interface"
@@ -100,6 +102,18 @@ def validate_receiver_address(raw: str, interface: str, rp_filter: int | None = 
         "rp_filter": rp_filter,
         "note": note,
     }
+
+
+def read_rp_filter(interface: str, root: Path = Path("/proc/sys/net/ipv4/conf")) -> dict | None:
+    """rp_filter as the kernel applies it: max(conf.all, conf.<interface>). Reading only the
+    interface key passes a 0 that Ubuntu's all=2 default (10-network-security.conf) overrides."""
+    values = {}
+    for key, name in (("all", "all"), ("interface", interface)):
+        path = root / name / "rp_filter"
+        if not path.exists():
+            return None
+        values[key] = int(path.read_text().strip())
+    return {**values, "effective": max(values.values())}
 
 
 class BootModeError(RuntimeError):
@@ -238,9 +252,9 @@ def preflight(*, labgrid_client: str | None = None, timeout: float = 15.0) -> di
             ).stdout
         except (OSError, subprocess.TimeoutExpired):
             raw = ""
-        rp = Path(f"/proc/sys/net/ipv4/conf/{iface}/rp_filter")
-        rp_val = int(rp.read_text().strip()) if rp.exists() else None
-        sections["address"] = validate_receiver_address(raw, iface, rp_val)
+        rp = read_rp_filter(iface)
+        sections["address"] = validate_receiver_address(raw, iface, rp and rp["effective"])
+        sections["address"]["rp_filter_keys"] = rp
     else:
         sections["address"] = {"ok": False, "reason": "no receiver interface"}
     lgc = labgrid_client or find_labgrid_client()

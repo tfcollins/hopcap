@@ -75,6 +75,31 @@ def test_address_check_requires_receiver_interface_or_rp_filter_zero():
     )["ok"]
 
 
+def fake_conf(tmp_path: Path, **values: int) -> Path:
+    for name, value in values.items():
+        (tmp_path / name).mkdir(parents=True)
+        (tmp_path / name / "rp_filter").write_text(f"{value}\n")
+    return tmp_path
+
+
+def test_rp_filter_is_the_effective_max_of_all_and_interface(tmp_path):
+    """The kernel uses max(conf.all, conf.<iface>); an interface 0 under all=2 still drops."""
+    rp = preflight.read_rp_filter("enp4s0f0np0", fake_conf(tmp_path, all=2, enp4s0f0np0=0))
+    assert rp == {"all": 2, "interface": 0, "effective": 2}
+    rp = preflight.read_rp_filter("enp4s0f0np0", fake_conf(tmp_path / "b", all=0, enp4s0f0np0=1))
+    assert rp["effective"] == 1
+    rp = preflight.read_rp_filter("enp4s0f0np0", fake_conf(tmp_path / "c", all=0, enp4s0f0np0=0))
+    assert rp["effective"] == 0
+    assert preflight.read_rp_filter("enp4s0f0np0", fake_conf(tmp_path / "d", all=0)) is None
+
+
+def test_address_remedy_names_both_rp_filter_keys():
+    other = "2: enp2s0    inet 192.0.2.2/24 brd 192.0.2.255 scope global enp2s0\n"
+    r = preflight.validate_receiver_address(other, "enp4s0f0np0", 2)
+    assert "net.ipv4.conf.all.rp_filter=0" in r["note"]
+    assert "net.ipv4.conf.enp4s0f0np0.rp_filter=0" in r["note"]
+
+
 def test_place_tags_are_matched_exactly():
     raw = (
         "Place 'tron':\n  tags: boot-strategy=BootZynqMPJTAG, carrier=adrv2crr-fmc, "
