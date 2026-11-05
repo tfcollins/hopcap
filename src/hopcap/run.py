@@ -57,6 +57,8 @@ class Components:
     after_edge: Callable[[bool, int], None] | None = None
     host_counters: Callable[[], dict] | None = None
     sleep: Callable[[float], None] = time.sleep
+    # The clock `sleep` advances; the time-base arm check measures elapsed time with it.
+    monotonic: Callable[[], float] = time.monotonic
     log: Callable[[str], None] = print
 
 
@@ -177,7 +179,7 @@ def run_live(cfg: RunConfig, c: Components) -> RunReport:
             sequence_mode=cfg.sequence_mode,
             drain_timeout_ticks=cfg.hopctrl_drain_timeout_ticks,
         )
-        tb_armed = framer_mod.configure(c.framer, cfg.framer, sleep=c.sleep)
+        tb_armed = framer_mod.configure(c.framer, cfg.framer, sleep=c.sleep, monotonic=c.monotonic)
         c.receiver.start()
         receiver_started = True
         tick.park_trigger_low(lead_ticks=max(tick_info["time_tick_hz"] // 100, 4 * rtt))

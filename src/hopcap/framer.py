@@ -35,6 +35,7 @@ TIME_BASE_ATTRS = (
 TB_MODE_ENABLE, TB_MODE_STRICT = 0x1, 0x2
 LOCK_STATES = ("no_pps", "acquiring", "locked", "holdover")  # TB_STATUS[1:0]
 LOCKED = 2
+ARM_SETTLE_S = 1.1  # one PPS period plus margin: an edge has followed the seconds write
 
 
 class TimeBaseError(RuntimeError):
@@ -77,6 +78,7 @@ def configure(
     *,
     now: Callable[[], float] = time.time,
     sleep: Callable[[float], None] = time.sleep,
+    monotonic: Callable[[], float] = time.monotonic,
 ) -> dict:
     """Program the endpoint, arm the time base, then enable. Returns the arm record ({} when
     ``cfg.time_base`` is off)."""
@@ -96,7 +98,9 @@ def configure(
         ]
     )
     fs.write("v49_udp_apply", "1")
-    record = arm_time_base(fs, cfg, now=now, sleep=sleep) if cfg.time_base else {}
+    record = (
+        arm_time_base(fs, cfg, now=now, sleep=sleep, monotonic=monotonic) if cfg.time_base else {}
+    )
     fs.write("v49_enable", "1")
     return record
 
@@ -123,6 +127,7 @@ def arm_time_base(
     *,
     now: Callable[[], float] = time.time,
     sleep: Callable[[float], None] = time.sleep,
+    monotonic: Callable[[], float] = time.monotonic,
 ) -> dict:
     """Arm the next PPS edge with the next host UTC second and enable timestamps. Call with the
     framer disabled. Fails closed unless the time base is LOCKED and its seconds counter has
@@ -130,34 +135,46 @@ def arm_time_base(
 
     The seconds label is the host clock's (+/-1 s); the sub-second phase is the selected PPS
     (Corundum's free-running PTP PPS by default), so stamps are sample-coherent within and
-    across hops but are not GNSS UTC."""
+    across hops but are not GNSS UTC.
+
+    The load check is vrt49's manual-arm check (scripts/zu11eg-pps.py): once an edge must have
+    followed the write, the counter may have advanced from the armed value by at most the whole
+    seconds elapsed since the write began. It holds however slow each sysfs round trip is; on
+    tron each one is a board-side python3 over the serial console, 0.6 s typical, 2-4 s when it
+    stalls, so the load edge (and the next ones) can pass before the first read."""
     before = time_base_state(fs)
     fs.write("v49_tb_mode", "0")  # the PPS source is EBUSY while timestamps are enabled
     fs.write("v49_tb_pps_source", cfg.pps_source)
     fs.write("v49_tb_status", "1")  # clear the resync sticky bit so the run's value is its own
     armed = int(now()) + 1
+    armed_at = monotonic()
     fs.write("v49_tb_seconds", str(armed))
+    written = monotonic()
     fs.write("v49_tb_mode", str(TB_MODE_ENABLE | (TB_MODE_STRICT if cfg.tb_strict else 0)))
-    # The arm loads at the next real edge. Wait for the counter to move and require that its
-    # first new value is the armed second (or the one after, when it already held that value).
-    start = int(fs.read("v49_tb_seconds").split()[-1], 0)
-    first_change = None
+    deadline = written + cfg.tb_lock_timeout_s
     status = 0
-    seconds = start
-    for _ in range(math.ceil(cfg.tb_lock_timeout_s / cfg.tb_poll_s)):
+    seconds = None
+    while True:
         sleep(cfg.tb_poll_s)
+        polled = monotonic()
         raw = fs.read_many(["v49_tb_status", "v49_tb_seconds"])
+        read_done = monotonic()
         status = int(raw["v49_tb_status"].split()[-1], 0)
         seconds = int(raw["v49_tb_seconds"].split()[-1], 0)
-        if first_change is None and seconds != start:
-            first_change = seconds
-            if first_change not in (armed, armed + 1):
+        # The arm loads at the first real edge after the write lands; a LOCKED time base has one
+        # every second, so a read begun more than a period after the write sees the load.
+        if status & 0x3 == LOCKED and polled - written > ARM_SETTLE_S:
+            advanced = (seconds - armed) & 0xFFFFFFFF
+            allowed = math.ceil(read_done - armed_at)
+            if advanced > allowed:
                 raise TimeBaseError(
-                    f"armed seconds {armed} did not load: the {cfg.pps_source} PPS edge moved "
-                    f"the counter from {start} to {first_change}"
+                    f"armed seconds {armed} did not load: the {cfg.pps_source} time base reads "
+                    f"{seconds} {read_done - armed_at:.1f} s after the arm (allowed "
+                    f"{armed}..{armed + allowed})"
                 )
-        if first_change is not None and status & 0x3 == LOCKED:
             return {"before": before, "armed_seconds": armed, "after_arm": time_base_state(fs)}
+        if read_done >= deadline:
+            break
     raise TimeBaseError(
         f"time base not locked {cfg.tb_lock_timeout_s:g} s after arming seconds {armed}: "
         f"lock_state {LOCK_STATES[status & 0x3]}, seconds {seconds}, PPS source "

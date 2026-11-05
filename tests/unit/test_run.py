@@ -79,6 +79,7 @@ def test_run_live_produces_a_verified_bundle_with_every_hop_ok(tmp_path):
         after_edge=lambda ex, hz: setattr(stager, "pll", hz),
         host_counters=lambda: {"rx_missed_errors": 0},
         sleep=lambda s: None,
+        monotonic=framer.tb.clock,
     )
     cfg = RunConfig(
         plan=plan,
@@ -141,11 +142,12 @@ def test_run_live_fails_closed_when_hop_controller_id_is_wrong(tmp_path):
         tick_read=tick.read_attr,
         tick_write=tick.write_attr,
         mmio=mmio,
-        framer=FakeSysfs(),
+        framer=(framer := FakeSysfs()),
         stager=FakeStager(pipeline),
         receiver=FakeReceiver(tmp_path / "x.spool", 1),
         pipeline=pipeline,
         sleep=lambda s: None,
+        monotonic=framer.tb.clock,
     )
     with pytest.raises(HopCtrlError, match="HOP1"):
         run_live(RunConfig(plan=plan, out_dir=tmp_path / "out", sample_rate_hz=245_760_000), comps)
