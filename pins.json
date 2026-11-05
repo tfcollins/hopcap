@@ -8,8 +8,8 @@
   },
   "vrt49": {
     "repository": "https://github.com/tfcollins/vrt49",
-    "revision": "eae8aa0aee16816f2657812101df42cfdcad7237",
-    "why": "tip of test/zu11eg-qsfp-hw (2026-10-22): AD9545 Q1B QSFP refclk fix, VRT49_PHYSICAL_PORT=qsfp, VRT49_CORUNDUM_BOOT=sd. Re-pin to the merge commit once it lands on main."
+    "revision": "5e2055082d2ecb56316fce2cbaa3037843321824",
+    "why": "vrt49 main 5e20550 (#53, ZU11EG QSFP lane 0 with the AD9545 Q1B refclk, squash of the test/zu11eg-qsfp-hw work previously pinned at eae8aa0, which no longer exists on any vrt49 branch). Its parent #62 samples the time-base seconds bus on the request edge: at eae8aa0 a TB_SECONDS_NEXT write could load a torn mix of old and new bits (tron 2026-11-04 probe: arm 1793848213 after 1793848203 loaded ~...217). Staged HDL delta vs eae8aa0: vrt49_time_base CDC fix, framer DEFAULT_PKT_WORDS parameter (default unchanged, 368) and vrt49_pack path; project dir, platform pins and the staged IP list unchanged."
   },
   "adi_hdl": {
     "repository": "https://github.com/analogdevicesinc/hdl.git",
