@@ -117,4 +117,7 @@ Use this XSA for JTAG runs; attempt 3 has the torn-seconds RTL.
   yet fallen inside a capture on hardware.
 - Upstream PRs (vrt49 `VRT_FABRIC_HOP_ENABLE`, Tick `--system-top`); `overlays/patches/` is empty
   because the assembler currently edits the staged tree directly.
-- Talise settle time is a knob, not a measured figure.
+- Talise settle time is a knob, not a measured figure. The analysis exists (`hopcap settle`,
+  `src/hopcap/settle.py`, plan `examples/plans/settle-measure.json`, how-to
+  `docs/how-to/measure-settle.md`; datax_sdk_sdr#9). The hardware measurement waits on the RF
+  reference cabling (chip B fixed-LO TX or a signal generator into chip A RX1); none is recorded on tron.

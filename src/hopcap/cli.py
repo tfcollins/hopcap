@@ -4,6 +4,8 @@
 ``hopcap plan --plan FILE --dry-run`` compiles a plan offline and prints JSON: slot table,
 edges with their Tick descriptors as the 12 hex words the driver accepts, and the timing
 checks.  Live commands (``run``) live in :mod:`hopcap.run` and are wired in later phases.
+``hopcap settle RUN_DIR --ref-hz F`` measures hop settle from a fixed RF reference
+(:mod:`hopcap.settle`).
 """
 
 from __future__ import annotations
@@ -246,6 +248,109 @@ def cmd_verify(args) -> int:
     return subprocess.run([sys.executable, str(script), args.kind, str(args.dir)]).returncode
 
 
+def _us(v: float | None) -> str:
+    return "-" if v is None else f"{v * 1e6:.2f}"
+
+
+def cmd_settle(args) -> int:
+    from hopcap.settle import analyse_run
+
+    try:
+        out = analyse_run(
+            list(args.run_dir),
+            args.ref_hz,
+            conjugate=args.conjugate,
+            tol_hz=args.tol_hz,
+            phase_tol_deg=args.phase_tol_deg,
+            window=args.window,
+            tail_fraction=args.tail_fraction,
+            min_snr_db=args.min_snr_db,
+            search_hz=args.search_hz,
+            band_fraction=args.band_fraction,
+            dc_guard_hz=args.dc_guard_hz,
+        )
+    except ValueError as exc:
+        print(f"hopcap settle: {exc}", file=sys.stderr)
+        return 2
+    s = out.summary
+    warnings = []
+    if s["n_refused"]:
+        reasons = ", ".join(f"{k} x{v}" for k, v in sorted(s["by_reason"].items()))
+        warnings.append(
+            f"WARNING: {s['n_refused']} of {s['non_priming_total']} non-priming hops refused "
+            f"({reasons}); max is a lower bound"
+        )
+    if s["n_censored"]:
+        warnings.append(
+            f"WARNING: {s['n_censored']} non-priming hops settled at their first sample "
+            "(censored: bounded by the unmeasured open latency); excluded from median/max"
+        )
+    if args.json:
+        json.dump(out.as_dict(), sys.stdout, indent=2, allow_nan=False)
+        sys.stdout.write("\n")
+        for w in warnings:
+            print(w, file=sys.stderr)
+    else:
+        print(
+            f"hopcap settle: reference {args.ref_hz / 1e6:.6f} MHz, tol {args.tol_hz:g} Hz, "
+            f"phase tol {args.phase_tol_deg:g} deg; times from the first captured sample"
+        )
+        hdr = (
+            "hop",
+            "prim",
+            "LO MHz",
+            "offset MHz",
+            "SNR dB",
+            "settle us",
+            "phase us",
+            "err Hz",
+            "status",
+        )
+        print("{:>4} {:>4} {:>10} {:>10} {:>7} {:>10} {:>10} {:>9}  {}".format(*hdr))
+        for h in out.hops:
+            r = h.result
+            status = "ok" if r.ok else r.reason
+            if r.ok and r.settled_at_first_sample:
+                status = "censored (settled at first sample: bound only)"
+            print(
+                "{:>4} {:>4} {:>10.3f} {:>+10.3f} {:>7} {:>10} {:>10} {:>9}  {}".format(
+                    h.index,
+                    "yes" if h.priming else "",
+                    h.planned_hz / 1e6,
+                    r.expected_offset_hz / 1e6,
+                    "-" if r.tone_snr_db is None else f"{r.tone_snr_db:.1f}",
+                    _us(r.settle_s),
+                    _us(r.phase_settle_s),
+                    "-" if r.offset_error_hz is None else f"{r.offset_error_hz:+.1f}",
+                    status,
+                )
+            )
+        st, ph = s["settle_s"], s["phase_settle_s"]
+        print(
+            f"non-priming hops: {s['non_priming_total']}  measured {s['n_measured']}  "
+            f"censored {s['n_censored']}  refused {s['n_refused']}"
+        )
+        bound = " (lower bound)" if s["n_refused"] else ""
+        if st:
+            print(f"settle  median {_us(st['median'])} us  max {_us(st['max'])} us{bound}")
+            print(f"phase   median {_us(ph['median'])} us  max {_us(ph['max'])} us{bound}")
+        else:
+            print("settle  no measured hop: no statistics")
+        for p in s["priming"]:
+            print(
+                f"priming hop {p['index']}: "
+                + (
+                    f"settle {_us(p['settle_s'])} us, phase {_us(p['phase_settle_s'])} us"
+                    if p["ok"]
+                    else str(p["reason"])
+                )
+            )
+        print("note: " + s["time_reference"])
+        for w in warnings:
+            print(w)
+    return 0 if (s["non_priming_ok"] and not s["n_refused"]) else 1
+
+
 def _git_sha() -> str:
     import subprocess
 
@@ -311,6 +416,24 @@ def main(argv: list[str] | None = None) -> int:
     v.add_argument("kind", choices=("bitstream", "boot", "run"))
     v.add_argument("dir", type=Path)
 
+    st = sub.add_parser(
+        "settle", help="measure hop settle from a fixed RF reference tone (settle_us 0 runs)"
+    )
+    st.add_argument("run_dir", type=Path, nargs="+", help="bundle(s): manifest.json + hops/")
+    st.add_argument("--ref-hz", type=float, required=True, help="reference CW frequency, Hz")
+    st.add_argument("--tol-hz", type=float, default=1000.0)
+    st.add_argument("--phase-tol-deg", type=float, default=5.0)
+    st.add_argument("--window", type=int, default=256, help="smoothing window, samples")
+    st.add_argument("--tail-fraction", type=float, default=0.25)
+    st.add_argument("--min-snr-db", type=float, default=10.0)
+    st.add_argument("--search-hz", type=float, default=200e3, help="tone search half-width")
+    st.add_argument(
+        "--band-fraction", type=float, default=0.8, help="usable band, fraction of fs/2"
+    )
+    st.add_argument("--dc-guard-hz", type=float, default=1e6, help="refuse tones this near DC")
+    st.add_argument("--conjugate", action="store_true", help="flip the spectrum (I/Q swapped)")
+    st.add_argument("--json", action="store_true", help="print the full analysis as JSON")
+
     args = ap.parse_args(argv)
     try:
         if args.cmd == "plan":
@@ -325,6 +448,8 @@ def main(argv: list[str] | None = None) -> int:
             return cmd_decode(args)
         if args.cmd == "verify":
             return cmd_verify(args)
+        if args.cmd == "settle":
+            return cmd_settle(args)
     except PlanError as exc:
         print(f"hopcap: plan error: {exc}", file=sys.stderr)
         return 2

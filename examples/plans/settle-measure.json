@@ -1,0 +1,11 @@
+{
+  "name": "settle-measure",
+  "description": "Settle measurement (datax_sdk_sdr#9): settle_us 0 so each capture opens as soon as the hop controller allows after the edge, 2 ms per hop for the transient, 200 ms period (the -slow plan's, above tron's staging floor). Needs a fixed, non-hopping CW reference into chip A RX (chip B on a fixed LO through 30-40 dB, or a signal generator). Hops 2420/2440/2460/2480 MHz keep a reference near 2450 MHz inside +/-98 MHz of every LO. Use 2452.5 MHz, not 2450 MHz: edge 0 primes on fhmInitFrequency 2450 MHz, where a 2450 MHz reference sits at DC and the priming hop cannot be measured. Analyse with: hopcap settle RUN_DIR --ref-hz 2452500000.",
+  "frequencies_hz": [2420000000, 2440000000, 2460000000, 2480000000],
+  "sample_rate_hz": 245760000,
+  "period_us": 200000,
+  "settle_us": 0,
+  "capture_us": 2000,
+  "pulse_us": 10000,
+  "lead_us": 50000
+}
