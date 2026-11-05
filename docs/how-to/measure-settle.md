@@ -70,17 +70,38 @@ For each hop, `hopcap.settle` does the following:
 1. Finds the tone in the last quarter of the capture (`--tail-fraction`) and estimates its SNR.
    The search is +/-200 kHz around the expected offset, and the SNR is tone power over noise
    power across the full sample rate.
-2. Mixes the tone to 0 Hz and low-passes it with a boxcar of `--window` samples (default 256,
-   about 1 us). It then averages the lag-1 phase difference over another window, which gives
-   the instantaneous frequency.
+2. Mixes the tone to 0 Hz and low-passes it with a boxcar of `--window` samples (default 256).
+   It then averages the lag-1 phase difference over another window, which gives the
+   instantaneous frequency. The two boxcars blur over 2 x window samples, so the **time
+   resolution is about 2 us** at the default (`resolution_s` in the JSON).
 3. **Settle**: the first time after which the frequency stays within `--tol-hz` (default 1 kHz)
-   of its final value. The final value is the median over the tail.
+   of its final value. The final value is the median over the tail. Every tail sample must
+   itself be within tolerance, and the settle point is searched only before the tail, so a
+   late excursion is refused (`unsettled_in_tail`) rather than reported as a long settle.
+   A transient that rings back through the band settles after its last excursion, not at its
+   first entry.
 4. **Phase settle**: the same test on the unwrapped phase, measured against a straight line
    fitted to the tail, with tolerance `--phase-tol-deg` (default 5 degrees).
 
-The summary reports the median and maximum over the non-priming hops, both overall and per LO
-step size. The priming hop is reported separately, because its VRT-vs-Tick spacing already
-shows an unexplained 62.8 us excess (see `STATUS.md`).
+Early in a large transient the tone can be more than about fs/window (about 1 MHz at the
+default) away from where the filter looks. The estimate there is meaningless, but this can
+only delay the reported settle, never shorten it.
+
+Each non-priming hop ends up in one of three classes:
+
+- **measured**: these are the only hops in the median and maximum, both overall and per LO step.
+- **censored** (`settled_at_first_sample`): already settled within the first 2 x window samples.
+  The value only says the hop settled before the gate opened, so it is counted (`n_censored`)
+  and excluded from the statistics. Excluding these biases the median high, never low.
+- **refused** (`ok: false`): counted in `n_refused` and `by_reason`. A refused hop may have
+  settled later than any measured one, so when any hop is refused each `max` carries
+  `max_is_lower_bound: true`, the table says "(lower bound)", and `hopcap settle` exits 1.
+
+The priming hop is reported separately, because its VRT-vs-Tick spacing already shows an
+unexplained 62.8 us excess (see `STATUS.md`).
+
+Below about 35-40 dB per-sample SNR at 245.76 MSPS, the default window and tolerance refuse
+hops as `estimate_too_noisy`. Raise the reference level, `--window` or `--tol-hz`.
 
 ### What the numbers are relative to
 
@@ -91,18 +112,24 @@ onto each other. `open_after_edge_min_s` (`settle_ticks / tick_hz`) is therefore
 bound on the open delay.
 
 A hop flagged `settled_at_first_sample` had already settled when the gate opened. For that hop,
-the settle time from the edge is bounded only by the unmeasured open latency.
+the settle time from the edge is bounded only by the unmeasured open latency, which is why it is
+censored from the statistics.
 
 ### When a hop is not measured
 
 The analysis never guesses. It reports `ok: false` with a reason in these cases:
 
 - the hop's disposition is not `ok` (the manifest reasons are carried over);
-- `tone_out_of_band` or `tone_near_dc`;
-- `tone_not_detected` (SNR below `--min-snr-db`, default 10 dB). If a tone sits at the
-  mirrored offset, the reason says so; try `--conjugate` for a swapped I/Q;
+- `tone_out_of_band` or `tone_near_dc` (`--band-fraction`, default 0.8 of fs/2;
+  `--dc-guard-hz`, default 1 MHz);
+- `tone_not_detected` (SNR below `--min-snr-db`, default 10 dB, within `--search-hz`, default
+  200 kHz). If a tone sits at the mirrored offset, the reason says so; try `--conjugate` for a
+  swapped I/Q;
 - `estimate_too_noisy` (tail frequency noise above 0.2 x tol): raise `--window`, the reference
   level, or the tolerance;
-- `tail_not_settled` or `never_settled`: the capture is too short for the transient.
+- `tail_not_settled`: the tail's two halves differ by more than tol/4, so the capture is too
+  short for the transient;
+- `unsettled_in_tail` or `phase_unsettled_in_tail`: a tail sample is outside tolerance.
 
-`hopcap settle` exits non-zero if no non-priming hop could be measured.
+`hopcap settle` exits 1 if any non-priming hop is refused or none is ok, and exits 2 on bad
+arguments, for example `--window 0`.

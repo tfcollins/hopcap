@@ -19,7 +19,7 @@ from hopcap.associate import EdgeResult, associate
 from hopcap.cli import load_plan
 from hopcap.export import write_bundle, write_sums
 from hopcap.plan import HopPlan, compile_plan
-from hopcap.settle import analyse_run, instantaneous_frequency, settle_time
+from hopcap.settle import _settle_index, analyse_run, instantaneous_frequency, settle_time
 
 ROOT = Path(__file__).resolve().parents[2]
 FS = 245_760_000
@@ -40,15 +40,22 @@ def tone(
     snr_db: float = 50.0,
     phase_step_rad: float = 0.0,
     step_at_s: float | None = None,
+    dev_hz: np.ndarray | None = None,
     seed: int = 1,
+    conj: bool = False,
 ) -> np.ndarray:
-    """(N, 2) <i2 I/Q of a CW tone whose frequency is offset + df0 * exp(-t / tau), plus noise."""
+    """(N, 2) <i2 I/Q of a CW tone whose frequency is offset + df0 * exp(-t / tau) (+ an
+    arbitrary per-sample deviation ``dev_hz``), plus noise.  ``conj`` swaps the spectrum."""
     t = np.arange(n) / FS
     cycles = offset_hz * t + df0_hz * tau_s * (1 - np.exp(-t / tau_s))
+    if dev_hz is not None:
+        cycles = cycles + np.cumsum(dev_hz) / FS
     phase = 2 * np.pi * np.mod(cycles, 1.0)
     if step_at_s is not None:
         phase = phase + np.where(t >= step_at_s, phase_step_rad, 0.0)
     x = AMP * np.exp(1j * phase)
+    if conj:
+        x = np.conj(x)
     if snr_db is not None:
         sigma = AMP / math.sqrt(2) / 10 ** (snr_db / 20)
         rng = np.random.default_rng(seed)
@@ -112,9 +119,40 @@ def test_noisier_capture_still_brackets_the_analytic_value():
 def test_no_transient_settles_at_first_sample():
     r = settle_time(tone(N, 12.5e6), FS, 12.5e6, TOL)
     assert r.ok, r.reason
-    assert r.settle_s <= r.resolution_s
-    assert r.phase_settle_s <= r.resolution_s
+    # Nothing ever leaves the tolerance, edges included: exactly sample 0, flagged censored.
+    assert r.settle_s == 0.0 and r.phase_settle_s == 0.0
     assert r.settled_at_first_sample is True
+    assert r.resolution_s == pytest.approx(2 * 256 / FS)  # two cascaded 256-sample boxcars
+
+
+def test_settled_at_first_sample_threshold_is_two_windows():
+    fast = settle_time(tone(N, 12.5e6, df0_hz=1e6, tau_s=0.1e-6), FS, 12.5e6, TOL)
+    assert fast.ok and fast.settled_at_first_sample is True  # 0.7 us transient, inside the blur
+    df0, tau = 1e6, 1e-6  # analytic 6.9 us, well beyond 2 x window = 2.08 us
+    slow = settle_time(tone(N, 12.5e6, df0_hz=df0, tau_s=tau), FS, 12.5e6, TOL)
+    assert slow.ok and slow.settled_at_first_sample is False
+    assert slow.settle_s == pytest.approx(analytic(df0, tau)[0], abs=slow.resolution_s)
+
+
+def test_settle_index_is_after_the_last_excursion():
+    assert _settle_index(np.array([5.0, 0.0, 5.0, 0.0, 0.0]), 1.0) == 3
+    assert _settle_index(np.array([0.0, 0.5, -0.9]), 1.0) == 0
+    assert _settle_index(np.array([0.0, 0.0, 2.0]), 1.0) == 3  # out at the end: len(dev)
+    assert _settle_index(np.array([-2.0, 1.0, -1.0]), 1.0) == 1  # |dev| == tol is within
+
+
+def test_ringing_transient_settles_after_its_last_excursion():
+    # Damped ringing: 1 MHz x exp(-t / 20 us) x cos(2 pi 50 kHz t) re-crosses the band every
+    # 10 us.  Settle is the last exit from +/-tol, computed on the exact model, not the first
+    # entry into the band.
+    t = np.arange(N) / FS
+    dev = 1e6 * np.exp(-t / 20e-6) * np.cos(2 * np.pi * 50e3 * t)
+    want = _settle_index(dev, TOL) / FS
+    first_entry = np.flatnonzero(np.abs(dev) <= TOL)[0] / FS
+    assert want - first_entry > 100e-6  # the rule matters for this signal
+    r = settle_time(tone(N, 12.5e6, dev_hz=dev), FS, 12.5e6, TOL)
+    assert r.ok, r.reason
+    assert r.settle_s == pytest.approx(want, abs=2 * r.resolution_s)
 
 
 def test_no_tone_is_not_ok_with_reason():
@@ -149,8 +187,41 @@ def test_too_noisy_estimate_is_refused_not_reported():
 
 def test_transient_longer_than_the_capture_is_refused():
     r = settle_time(tone(N, 12.5e6, df0_hz=1e6, tau_s=1e-3), FS, 12.5e6, TOL)
-    assert not r.ok
-    assert r.reason.startswith(("tail_not_settled", "estimate_too_noisy"))
+    assert not r.ok and r.settle_s is None
+
+
+def _tail_ramp(hz_across_tail: float) -> np.ndarray:
+    """Frequency ramp whose change across the 0.25 tail (N/4 samples) is ``hz_across_tail``."""
+    return hz_across_tail / (N // 4) * np.arange(N)
+
+
+def test_slow_drift_in_the_tail_is_tail_not_settled():
+    # 800 Hz across the tail: halves differ by ~400 Hz > tol/4, yet every tail sample is within
+    # +/-400 Hz of the median and the noise is tiny, so only the drift test can refuse it.
+    r = settle_time(tone(N, 12.5e6, dev_hz=_tail_ramp(800.0)), FS, 12.5e6, TOL)
+    assert not r.ok and r.reason.startswith("tail_not_settled"), r.reason
+    assert r.settle_s is None
+
+
+def test_late_excursion_in_the_tail_is_refused_not_reported():
+    # Review I1: one spike late in the tail used to give ok with settle_s ~ 1.8 ms.
+    r = settle_time(tone(N, 12.5e6, phase_step_rad=1.0, step_at_s=1.8e-3), FS, 12.5e6, TOL)
+    assert not r.ok and r.reason.startswith("unsettled_in_tail"), r.reason
+    assert r.settle_s is None
+
+
+def test_phase_unsettled_in_the_tail_is_refused():
+    # 400 Hz across the tail: frequency within tol and drift below tol/4, but the quadratic
+    # phase leaves ~6 deg of residual against the tail's line fit.
+    r = settle_time(tone(N, 12.5e6, dev_hz=_tail_ramp(400.0)), FS, 12.5e6, TOL, phase_tol_deg=2.0)
+    assert not r.ok and r.reason.startswith("phase_unsettled_in_tail"), r.reason
+    assert r.settle_s is None and r.phase_settle_s is None
+
+
+@pytest.mark.parametrize("window", [0, -4, 2.5])
+def test_window_is_validated_up_front(window):
+    with pytest.raises(ValueError, match="window"):
+        settle_time(tone(1024, 12.5e6), FS, 12.5e6, TOL, window=window)
 
 
 def test_phase_step_sets_phase_settle():
@@ -173,7 +244,8 @@ TAUS = {0: 30e-6, 1: 10e-6, 2: 20e-6, 3: 40e-6, 4: 15e-6}  # by edge index; 0 is
 DF0 = 1e6
 
 
-def _bundle(tmp_path, *, drop_context_for=frozenset()):
+def _bundle(tmp_path, *, drop_context_for=frozenset(), taus=None, conj=False):
+    taus = taus or TAUS
     p = HopPlan(
         frequencies_hz=tuple(f * MHZ for f in HOPS_MHZ),
         period_ticks=2_000_000,
@@ -215,7 +287,10 @@ def _bundle(tmp_path, *, drop_context_for=frozenset()):
         n = len(np.load(path))
         if n:
             offset = REF_HZ - hop["planned_hz"]
-            np.save(path, tone(n, offset, df0_hz=DF0, tau_s=TAUS[hop["index"]], seed=hop["index"]))
+            np.save(
+                path,
+                tone(n, offset, df0_hz=DF0, tau_s=taus[hop["index"]], seed=hop["index"], conj=conj),
+            )
     write_sums(out)
     return c, out
 
@@ -232,7 +307,9 @@ def test_analyse_run_on_an_exported_bundle(tmp_path):
     assert run.hops[0].priming and run.hops[0].planned_hz == 2_450 * MHZ
     assert run.hops[0].step_hz is None and run.hops[1].step_hz == -30 * MHZ
     s = run.summary
-    assert s["non_priming_ok"] == 4
+    assert s["non_priming_ok"] == 4 and s["n_measured"] == 4
+    assert s["n_censored"] == 0 and s["n_refused"] == 0 and s["by_reason"] == {}
+    assert s["complete"] is True and s["settle_s"]["max_is_lower_bound"] is False
     want = sorted(analytic(DF0, TAUS[i])[0] for i in (1, 2, 3, 4))
     assert s["settle_s"]["max"] == pytest.approx(want[-1], abs=2e-6)
     assert s["settle_s"]["median"] == pytest.approx((want[1] + want[2]) / 2, abs=2e-6)
@@ -250,8 +327,68 @@ def test_analyse_run_carries_invalid_hops_as_not_ok(tmp_path):
     bad = run.hops[2]
     assert not bad.result.ok
     assert bad.disposition == "invalid" and "no_context" in bad.result.reason
-    assert run.summary["non_priming_ok"] == 3
+    s = run.summary
+    assert s["non_priming_ok"] == 3 and s["n_refused"] == 1
+    assert s["by_reason"] == {"hop_invalid": 1} and s["complete"] is False
+    # A refused hop may have settled later than any measured one.
+    assert s["settle_s"]["n"] == 3 and s["settle_s"]["max_is_lower_bound"] is True
+    assert s["phase_settle_s"]["max_is_lower_bound"] is True
     json.dumps(run.as_dict(), allow_nan=False)
+
+
+def test_censored_hops_are_counted_not_averaged(tmp_path):
+    # Hops 1 and 3 settle inside the first 2 x window samples: censored, excluded from stats.
+    taus = {**TAUS, 1: 0.1e-6, 3: 0.1e-6}
+    _c, out = _bundle(tmp_path, taus=taus)
+    run = analyse_run(out, REF_HZ, tol_hz=TOL)
+    assert [h.result.settled_at_first_sample for h in run.hops[1:]] == [True, False, True, False]
+    s = run.summary
+    assert s["n_censored"] == 2 and s["n_measured"] == 2 and s["n_refused"] == 0
+    want = sorted(analytic(DF0, TAUS[i])[0] for i in (2, 4))
+    assert s["settle_s"]["n"] == 2
+    assert s["settle_s"]["median"] == pytest.approx(sum(want) / 2, abs=2e-6)
+    assert s["by_step_hz"][str(30 * MHZ)]["settle_s"] is None  # hop 1 was censored
+    assert s["by_step_hz"][str(30 * MHZ)]["n_censored"] == 1
+
+
+def test_conjugate_flag_recovers_a_swapped_spectrum(tmp_path):
+    _c, out = _bundle(tmp_path, conj=True)
+    plain = analyse_run(out, REF_HZ, tol_hz=TOL)
+    assert not any(h.result.ok for h in plain.hops)
+    assert all("mirrored" in h.result.reason for h in plain.hops)
+    flipped = analyse_run(out, REF_HZ, tol_hz=TOL, conjugate=True)
+    assert all(h.result.ok for h in flipped.hops)
+    assert flipped.hops[1].result.settle_s == pytest.approx(analytic(DF0, TAUS[1])[0], abs=2e-6)
+
+
+def _edit_manifest(out, fn):
+    path = out / "manifest.json"
+    m = json.loads(path.read_text())
+    fn(m)
+    path.write_text(json.dumps(m))
+
+
+def test_context_frequency_mismatch_is_refused(tmp_path):
+    _c, out = _bundle(tmp_path)
+    _edit_manifest(out, lambda m: m["hops"][2].update(context_hz=m["hops"][2]["planned_hz"] + 1))
+    r = analyse_run(out, REF_HZ, tol_hz=TOL).hops[2].result
+    assert not r.ok and r.reason.startswith("context_frequency")
+
+
+def test_missing_hop_file_is_refused(tmp_path):
+    _c, out = _bundle(tmp_path)
+    (out / "hops" / "hop_0003.npy").unlink()
+    run = analyse_run(out, REF_HZ, tol_hz=TOL)
+    assert not run.hops[3].result.ok and run.hops[3].result.reason == "missing hop_0003.npy"
+    assert run.summary["by_reason"] == {"missing hop_0003.npy": 1}
+
+
+def test_sample_count_mismatch_is_refused(tmp_path):
+    _c, out = _bundle(tmp_path)
+    path = out / "hops" / "hop_0004.npy"
+    np.save(path, np.load(path)[:-360])
+    r = analyse_run(out, REF_HZ, tol_hz=TOL).hops[4].result
+    assert not r.ok and "manifest says" in r.reason
 
 
 def test_analyse_run_with_a_2450_reference_refuses_the_priming_hop(tmp_path):
@@ -277,6 +414,30 @@ def test_cli_settle_table_and_json(tmp_path):
     assert r.returncode == 0, r.stderr
     got = json.loads(r.stdout)
     assert got["schema"] == "hopcap-settle/v1" and got["summary"]["non_priming_ok"] == 4
+
+
+def test_cli_settle_exits_nonzero_and_warns_when_a_hop_is_refused(tmp_path):
+    _c, out = _bundle(tmp_path, drop_context_for={2})
+    r = run_cli("settle", str(out), "--ref-hz", str(REF_HZ))
+    assert r.returncode == 1
+    assert "WARNING: 1 of 4 non-priming hops refused (hop_invalid x1)" in r.stdout
+    assert "(lower bound)" in r.stdout
+    r = run_cli("settle", str(out), "--ref-hz", str(REF_HZ), "--json")
+    assert r.returncode == 1 and "WARNING" in r.stderr
+    assert json.loads(r.stdout)["summary"]["n_refused"] == 1
+
+
+def test_cli_settle_reports_censored_hops(tmp_path):
+    _c, out = _bundle(tmp_path, taus={**TAUS, 2: 0.1e-6})
+    r = run_cli("settle", str(out), "--ref-hz", str(REF_HZ))
+    assert r.returncode == 0, r.stdout
+    assert "censored 1" in r.stdout and "settled at their first sample" in r.stdout
+
+
+def test_cli_settle_rejects_a_bad_window(tmp_path):
+    _c, out = _bundle(tmp_path)
+    r = run_cli("settle", str(out), "--ref-hz", str(REF_HZ), "--window", "0")
+    assert r.returncode == 2 and "window" in r.stderr
 
 
 def test_cli_settle_fails_when_no_hop_is_measurable(tmp_path):

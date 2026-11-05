@@ -255,20 +255,41 @@ def _us(v: float | None) -> str:
 def cmd_settle(args) -> int:
     from hopcap.settle import analyse_run
 
-    out = analyse_run(
-        list(args.run_dir),
-        args.ref_hz,
-        conjugate=args.conjugate,
-        tol_hz=args.tol_hz,
-        phase_tol_deg=args.phase_tol_deg,
-        window=args.window,
-        tail_fraction=args.tail_fraction,
-        min_snr_db=args.min_snr_db,
-    )
+    try:
+        out = analyse_run(
+            list(args.run_dir),
+            args.ref_hz,
+            conjugate=args.conjugate,
+            tol_hz=args.tol_hz,
+            phase_tol_deg=args.phase_tol_deg,
+            window=args.window,
+            tail_fraction=args.tail_fraction,
+            min_snr_db=args.min_snr_db,
+            search_hz=args.search_hz,
+            band_fraction=args.band_fraction,
+            dc_guard_hz=args.dc_guard_hz,
+        )
+    except ValueError as exc:
+        print(f"hopcap settle: {exc}", file=sys.stderr)
+        return 2
     s = out.summary
+    warnings = []
+    if s["n_refused"]:
+        reasons = ", ".join(f"{k} x{v}" for k, v in sorted(s["by_reason"].items()))
+        warnings.append(
+            f"WARNING: {s['n_refused']} of {s['non_priming_total']} non-priming hops refused "
+            f"({reasons}); max is a lower bound"
+        )
+    if s["n_censored"]:
+        warnings.append(
+            f"WARNING: {s['n_censored']} non-priming hops settled at their first sample "
+            "(censored: bounded by the unmeasured open latency); excluded from median/max"
+        )
     if args.json:
         json.dump(out.as_dict(), sys.stdout, indent=2, allow_nan=False)
         sys.stdout.write("\n")
+        for w in warnings:
+            print(w, file=sys.stderr)
     else:
         print(
             f"hopcap settle: reference {args.ref_hz / 1e6:.6f} MHz, tol {args.tol_hz:g} Hz, "
@@ -290,7 +311,7 @@ def cmd_settle(args) -> int:
             r = h.result
             status = "ok" if r.ok else r.reason
             if r.ok and r.settled_at_first_sample:
-                status = "ok (settled at first sample: bound only)"
+                status = "censored (settled at first sample: bound only)"
             print(
                 "{:>4} {:>4} {:>10.3f} {:>+10.3f} {:>7} {:>10} {:>10} {:>9}  {}".format(
                     h.index,
@@ -306,11 +327,15 @@ def cmd_settle(args) -> int:
             )
         st, ph = s["settle_s"], s["phase_settle_s"]
         print(
-            f"non-priming ok: {s['non_priming_ok']} of {sum(not h.priming for h in out.hops)} hops"
+            f"non-priming hops: {s['non_priming_total']}  measured {s['n_measured']}  "
+            f"censored {s['n_censored']}  refused {s['n_refused']}"
         )
+        bound = " (lower bound)" if s["n_refused"] else ""
         if st:
-            print(f"settle  median {_us(st['median'])} us  max {_us(st['max'])} us")
-            print(f"phase   median {_us(ph['median'])} us  max {_us(ph['max'])} us")
+            print(f"settle  median {_us(st['median'])} us  max {_us(st['max'])} us{bound}")
+            print(f"phase   median {_us(ph['median'])} us  max {_us(ph['max'])} us{bound}")
+        else:
+            print("settle  no measured hop: no statistics")
         for p in s["priming"]:
             print(
                 f"priming hop {p['index']}: "
@@ -321,7 +346,9 @@ def cmd_settle(args) -> int:
                 )
             )
         print("note: " + s["time_reference"])
-    return 0 if s["non_priming_ok"] else 1
+        for w in warnings:
+            print(w)
+    return 0 if (s["non_priming_ok"] and not s["n_refused"]) else 1
 
 
 def _git_sha() -> str:
@@ -399,6 +426,11 @@ def main(argv: list[str] | None = None) -> int:
     st.add_argument("--window", type=int, default=256, help="smoothing window, samples")
     st.add_argument("--tail-fraction", type=float, default=0.25)
     st.add_argument("--min-snr-db", type=float, default=10.0)
+    st.add_argument("--search-hz", type=float, default=200e3, help="tone search half-width")
+    st.add_argument(
+        "--band-fraction", type=float, default=0.8, help="usable band, fraction of fs/2"
+    )
+    st.add_argument("--dc-guard-hz", type=float, default=1e6, help="refuse tones this near DC")
     st.add_argument("--conjugate", action="store_true", help="flip the spectrum (I/Q swapped)")
     st.add_argument("--json", action="store_true", help="print the full analysis as JSON")
 
