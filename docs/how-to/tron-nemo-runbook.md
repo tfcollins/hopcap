@@ -52,5 +52,8 @@ A run from nemo (the launcher takes the shared lock itself; do not wrap it in `f
 scripts/run-tron-hopcap.sh --artifacts ~/hopcap-artifacts/boot-attempt3 \
   --url http://10.0.0.71:8749/boot-attempt3 --out ~/hopcap-artifacts/run-$(date +%Y%m%d-%H%M) \
   --plan examples/plans/band-2400-2500-4slot-slow.json --python ~/hopcap-venv/bin/python \
-  --xsa ~/hopcap-artifacts/bitstream-attempt3/system_top.xsa
+  --xsa ~/hopcap-artifacts/bitstream-tbfix/system_top.xsa
 ```
+
+`bitstream-tbfix` (built from `ed086ef`, XSA SHA-256 `6b02535c...`) carries vrt49's time-base
+seconds CDC fix; `bitstream-attempt3` predates it and can load a torn seconds value when armed.
