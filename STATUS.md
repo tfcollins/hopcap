@@ -82,6 +82,20 @@ need that driver. A bad tag stops the run before staging; an explicit `--boot` o
 with a warning. `board-session.json` records `mode_source`. Unit-tested and resolved read-only
 against the live place (`jtag place tron boot-mode=jtag`); no hardware boot since this change, and the SD path is not re-exercised.
 
+## Time-base arm fix and bitstream tbfix (2026-11-04/05) — verified on tron
+`test_hop_capture_plan` failed `TimeBaseError: armed seconds ... did not load` (hw-test 41956678880).
+A timed probe on tron found two causes. (1) The arm check required the first changed seconds value
+to be armed/armed+1, but each sysfs access is a board-side python3 over serial (0.6 s, 2-4 s when it
+stalls), so the load edge passed unseen; it now uses vrt49's elapsed-time bound. (2) The pinned vrt49
+`eae8aa0` predates vrt49 #62, and one arm in six loaded a torn seconds value; the pin moved to
+`5e20550` (main, #53). Both in #5 (`2760d09`). Bitstream from `ed086ef`:
+`hdl-dev-2:/mnt/disk2/scratch/hopcap/ws-tbfix-20261105T032218Z`, `verify_evidence.py bitstream` OK,
+WNS +0.135 ns, WHS +0.010 ns, bit `d470d24438eb...`, XSA
+`6b02535c8e693c546f0edbf94753be0229297e1098de1c2a02febb03393e32ce` (nemo
+`~/hopcap-artifacts/bitstream-tbfix/`). Kernel/DTB unchanged (boot-attempt3). hw-test 41972349787:
+4/4 passed, time base locked, 0 missed edges, 3,415 packets with 0 zero stamps and 0 step errors.
+Use this XSA for JTAG runs; attempt 3 has the torn-seconds RTL.
+
 ## Not done
 - Hard-fail table lives in `tests/hardware/test_hw_hopcap.py`.
 - The 62.8 µs excess on the priming hop's VRT-vs-Tick spacing is unexplained; no PPS edge has
