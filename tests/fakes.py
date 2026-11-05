@@ -156,8 +156,10 @@ class FakeTimeBase:
     """The vrt49 time base as iio-vrt49-buffer exposes it on the framer device: seconds armed
     through v49_tb_seconds load at the next PPS edge, LOCKED takes two real edges, and
     v49_tb_pps_source is EBUSY while timestamps are enabled. Virtual time advances `step_s` per
-    v49_tb_status read, like FakeTickDevice's polls. `pps=False` is a dead PPS input;
-    `loads_seconds=False` is a seconds arm that never reaches the sample domain."""
+    v49_tb_status read, like FakeTickDevice's polls, and `latency_s` per v49_tb_* access (the
+    board helper's round trip over the serial console: ~0.6 s, 2-4 s when it stalls), with PPS
+    edges firing on schedule meanwhile; `clock()` is that virtual time. `pps=False` is a dead PPS
+    input; `loads_seconds=False` is a seconds arm that never reaches the sample domain."""
 
     NAMES = ("corundum", "external")
 
@@ -171,15 +173,20 @@ class FakeTimeBase:
         loads_seconds: bool = True,
         step_s: float = 0.25,
         phase_s: float = 0.6,
+        latency_s: float = 0.0,
     ):
         self.pps, self.loads_seconds, self.step_s = pps, loads_seconds, step_s
+        self.latency_s = latency_s
         self.t, self.next_edge = 0.0, phase_s
         self.edges = 2 if (pps and locked) else 0
         self.seconds, self.armed = seconds, None
         self.mode, self.source, self.sticky, self.missed = mode, 0, False, 0
 
-    def _advance(self):
-        self.t += self.step_s
+    def clock(self) -> float:
+        return self.t
+
+    def _advance(self, dt: float | None = None):
+        self.t += self.step_s if dt is None else dt
         while self.pps and self.t >= self.next_edge:
             self.next_edge += 1.0
             self.edges += 1
@@ -193,6 +200,7 @@ class FakeTimeBase:
         return min(self.edges, 2)
 
     def read(self, attr: str) -> str:
+        self._advance(self.latency_s)
         if attr == "v49_tb_status":
             self._advance()
             lk = self.lock_state
@@ -206,6 +214,7 @@ class FakeTimeBase:
         }[attr]
 
     def write(self, attr: str, value: str) -> None:
+        self._advance(self.latency_s)
         if attr == "v49_tb_mode":
             mode = int(value, 0)
             if mode & ~0x7:

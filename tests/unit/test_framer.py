@@ -23,7 +23,9 @@ ARMED = 1_800_000_001
 
 
 def _configure(fs, cfg=None):
-    return configure(fs, cfg or FramerConfig(), now=lambda: NOW, sleep=lambda _s: None)
+    return configure(
+        fs, cfg or FramerConfig(), now=lambda: NOW, sleep=lambda _s: None, monotonic=fs.tb.clock
+    )
 
 
 def test_configure_disables_then_programs_endpoint_then_enables_without_software_context():
@@ -104,6 +106,35 @@ def test_arming_fails_when_the_armed_seconds_never_load():
     with pytest.raises(TimeBaseError, match=str(ARMED)):
         _configure(fs)
     assert ("v49_enable", "1") not in fs.writes
+
+
+@pytest.mark.parametrize("latency_s", [0.6, 1.3, 2.5])
+@pytest.mark.parametrize("phase_s", [0.05, 0.4, 0.95])
+def test_arming_tolerates_slow_round_trips_that_let_the_load_edge_pass_unseen(latency_s, phase_s):
+    """hw-test 41956678880 / tron probe 2026-11-04: each sysfs access is a board-side python3
+    over the serial console (~0.6 s, 2-4 s when it stalls), so the edge that loads the armed
+    seconds, and the next ones, can pass before the first read. A loaded arm must not be
+    reported as 'did not load'."""
+    fs = FakeSysfs(time_base=FakeTimeBase(seconds=ARMED - 1, latency_s=latency_s, phase_s=phase_s))
+    record = _configure(fs)
+    assert record["armed_seconds"] == ARMED
+    assert record["after_arm"]["lock_state"] == "locked"
+    assert record["after_arm"]["seconds"] > ARMED
+    assert fs.writes[-1] == ("v49_enable", "1")
+
+
+def test_a_counter_that_never_loads_is_still_caught_through_slow_round_trips():
+    fs = FakeSysfs(time_base=FakeTimeBase(loads_seconds=False, seconds=17, latency_s=1.3))
+    with pytest.raises(TimeBaseError, match=f"armed seconds {ARMED} did not load"):
+        _configure(fs)
+    assert ("v49_enable", "1") not in fs.writes
+
+
+def test_a_counter_running_ahead_of_the_arm_is_caught():
+    # The old value keeps counting and is already past what the elapsed time allows.
+    fs = FakeSysfs(time_base=FakeTimeBase(loads_seconds=False, seconds=ARMED + 30))
+    with pytest.raises(TimeBaseError, match="did not load"):
+        _configure(fs)
 
 
 def test_arming_waits_for_lock_after_a_cold_start():

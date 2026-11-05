@@ -104,6 +104,7 @@ def _components(tmp_path, *, tick=None, mmio=None, framer=None, rx=None, box=Non
         on_compiled=on_compiled,
         after_edge=lambda ex, hz: setattr(stager, "pll", hz),
         sleep=lambda s: None,
+        monotonic=framer.tb.clock,
     )
     return p, comps, mmio, framer, stager, rx
 
