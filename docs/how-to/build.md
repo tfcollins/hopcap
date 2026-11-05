@@ -3,18 +3,32 @@
 Everything is pinned by `pins.json`; `tests/unit/test_pins.py` fails if the submodules or
 vrt49's own ADI HDL / Corundum / Linux pins drift from it.
 
+## Pick the port
+
+tron streams over one of two cages, and the bitstream, the boot set and the run must agree on it
+(`--port`, recorded as `physical_port` in `MANIFEST.json` and `boot-provenance.json`):
+
+| `--port` | Cage | Shell | GT refclk | nemo receiver |
+|---|---|---|---|---|
+| `sfp` (default) | SFP+ | `QSFP_ENABLE=0`, `system_top_sfp.v` | AD9545 OUT1_A/Q1A | 82599 `enp2s0` |
+| `qsfp` | QSFP lane 0 | `QSFP_ENABLE=1`, `system_top_corundum.v` | AD9545 OUT1_B/Q1B | XL710 `enp4s0f0np0` |
+
+The receiver per port lives in `src/hopcap/link.py`; runs select it with `VRT49_PHYSICAL_PORT`.
+Since 2026-11-05 the XL710 cage carries mini2's 4x10G breakout, so `qsfp` runs need tron's QSFP
+DAC moved back into it first (datax_sdk_sdr#25).
+
 ## 1. Assemble the workspace
 
 ```sh
 git submodule update --init
-python3 scripts/assemble_workspace.py --build-root build/ws --fetch
+python3 scripts/assemble_workspace.py --build-root build/ws --fetch [--port sfp|qsfp]
 ```
 
 Or point at existing checkouts at the pinned SHAs (`--adi-hdl`, `--corundum`). The assembler
 stages vrt49's IP and project, the hopcap IP and block-design fragment, Tick's RTL and fragment,
-applies Tick's `patch_system_top()` to `system_top_corundum.v`, edits the project files at
-anchored lines, applies `overlays/patches/*.patch`, runs vrt49's dual-Talise and QSFP contract
-checks, and writes `MANIFEST.json` with the SHA-256 of every staged file.
+applies Tick's `patch_system_top()` to the port's top-level, edits the project files at anchored
+lines, applies `overlays/patches/*.patch`, runs vrt49's dual-Talise check (plus the QSFP pinout
+check for `qsfp`), and writes `MANIFEST.json` with the SHA-256 of every staged file.
 
 ## 2. Synthesize (Vivado 2025.1)
 
@@ -24,13 +38,14 @@ scripts/build_bitstream_remote.sh --ws build/ws --host hdl-dev-2.local          
 python3 scripts/verify_evidence.py bitstream evidence/bitstream-<stamp> [--release]
 ```
 
-The build is vrt49's CI invocation (`QSFP_ENABLE=1`, `SFP_REFCLK_MHZ=156.25`, fixed UDP tuple)
-followed by vrt49's timing/netlist checks and `check_hop_netlist.py`.
+The build takes the port from the workspace's `MANIFEST.json` and runs vrt49's CI invocation
+(`QSFP_ENABLE=0|1`, `SFP_REFCLK_MHZ=156.25`, fixed UDP tuple), followed by vrt49's timing and RX-tap
+netlist checks and `check_hop_netlist.py` on that port's top-level.
 
 ## 3. Kernel, DTB, overlays, BOOT.BIN
 
 ```sh
-scripts/build_boot_artifacts.sh --xsa evidence/bitstream-<stamp>/system_top.xsa --out evidence/boot-<stamp>
+scripts/build_boot_artifacts.sh --port sfp --xsa evidence/bitstream-<stamp>/system_top.xsa --out evidence/boot-<stamp>
 python3 scripts/verify_evidence.py boot evidence/boot-<stamp>
 ```
 

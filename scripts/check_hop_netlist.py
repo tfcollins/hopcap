@@ -24,6 +24,12 @@ REQUIRED_NETLIST = (
     "fabric_rf_frequency_q44_20",
     "fabric_context_accepted",
 )
+# The top-level each port builds; it must match assemble_workspace.PORT_TOP (a unit test checks).
+# Kept here too because build_bitstream_remote.sh ships only this script to the build host.
+PORT_TOP = {
+    "sfp": "projects/adrv9009zu11eg_vrt49_corundum/system_top_sfp.v",
+    "qsfp": "projects/adrv9009zu11eg/adrv2crr_fmc/system_top_corundum.v",
+}
 REQUIRED_TOP = (
     "assign adrv9009_gpio_00_a = tick_fhm_gpio[0];",
     ".tick_fhm_gpio (tick_fhm_gpio),",
@@ -52,9 +58,10 @@ def check(project_dir: Path, top: Path) -> list[str]:
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("hdl_root", type=Path)
+    ap.add_argument("--port", choices=tuple(PORT_TOP), default="qsfp")
     args = ap.parse_args()
     project_dir = args.hdl_root / "projects/adrv9009zu11eg_vrt49_corundum"
-    top = args.hdl_root / "projects/adrv9009zu11eg/adrv2crr_fmc/system_top_corundum.v"
+    top = args.hdl_root / PORT_TOP[args.port]
     errors = check(project_dir, top)
     for e in errors:
         print(f"check_hop_netlist: {e}", file=sys.stderr)

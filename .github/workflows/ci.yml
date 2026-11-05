@@ -92,6 +92,9 @@ jobs:
 
   assemble-check:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        port: [sfp, qsfp]
     steps:
       - uses: actions/checkout@v4
         with:
@@ -103,18 +106,19 @@ jobs:
         with:
           python-version: "3.12"
       - name: Assemble the pinned workspace (shallow fetch, no Vivado)
-        run: python3 scripts/assemble_workspace.py --build-root build/ws --fetch
+        run: python3 scripts/assemble_workspace.py --build-root build/ws --fetch --port ${{ matrix.port }}
       - name: Manifest sanity
         run: |
           python3 - <<'PY'
           import json
           m = json.load(open("build/ws/MANIFEST.json"))
           assert m["contract_checks"], "contract checks did not run"
+          assert m["physical_port"] == "${{ matrix.port }}", m["physical_port"]
           assert any("vrt49_fhm_hop_ctrl" in f for f in m["files"])
           assert any("tick_adrv9009zu11eg_adrv2crr_fmc.tcl" in f for f in m["files"])
           print(len(m["files"]), "staged files;", "patch queue:", m["patch_queue"])
           PY
       - uses: actions/upload-artifact@v4
         with:
-          name: workspace-manifest
+          name: workspace-manifest-${{ matrix.port }}
           path: build/ws/MANIFEST.json

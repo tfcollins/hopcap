@@ -59,6 +59,7 @@ def board():
 
 @pytest.fixture(scope="session")
 def components(board, tmp_path_factory):
+    from hopcap import link
     from hopcap.run import build_components_from_board
 
     out = Path(os.environ.get("HOPCAP_OUT", tmp_path_factory.mktemp("hopcap-run")))
@@ -67,6 +68,6 @@ def components(board, tmp_path_factory):
         board_ip=board["ip"],
         out_dir=out,
         bind=os.environ.get("HOPCAP_BIND", "192.0.2.2:4991"),
-        rx_interface=os.environ.get("HOPCAP_RX_INTERFACE", "enp4s0f0np0"),
+        rx_interface=os.environ.get("HOPCAP_RX_INTERFACE") or link.receiver().interface,
         rx_cpu=int(os.environ["HOPCAP_RX_CPU"]) if os.environ.get("HOPCAP_RX_CPU") else None,
     )

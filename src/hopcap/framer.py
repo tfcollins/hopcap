@@ -13,8 +13,10 @@ from __future__ import annotations
 import math
 import time
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Protocol
+
+from hopcap import link
 
 COUNTERS = (
     "v49_tx_forwarded_packets",
@@ -58,7 +60,8 @@ class FramerConfig:
     dest_port: int = 4991
     source_ip: str = "192.0.2.1"
     source_port: int = 4991
-    dest_mac: str = "64:9d:99:6f:a9:6a"  # nemo XL710 enp4s0f0np0 (verify in HOSTS.md)
+    # nemo's NIC for the cage VRT49_PHYSICAL_PORT names (hopcap.link; verify in HOSTS.md)
+    dest_mac: str = field(default_factory=lambda: link.receiver().mac)
     source_mac: str = "02:00:00:00:00:01"
     ttl: int = 64
     time_base: bool = True
