@@ -26,14 +26,14 @@
           "tier": 2,
           "workflow": "hw-test.yml",
           "evidence": "https://tfcollins.github.io/hopcap/reports/2026-10-25-tron-vrt-timestamps.html",
-          "note": "sample-exact VRT timestamps on the QSFP path"
+          "note": "sample-exact VRT timestamps; QSFP lane 0 (2026-10-25), SFP+ default since 2026-11-05"
         },
         "vrt-udp-10g": {
           "status": "validated",
           "tier": 2,
           "workflow": "hw-test.yml",
           "evidence": "https://tfcollins.github.io/hopcap/reports/2026-10-23-tron-first-run.html",
-          "note": "QSFP lane 0 to the host spooler"
+          "note": "SFP+ to nemo 82599 by default (hw-test 42072932538, 2026-11-05); QSFP lane 0 selectable"
         },
         "timed-capture": {
           "status": "planned",

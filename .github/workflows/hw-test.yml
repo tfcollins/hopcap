@@ -21,7 +21,7 @@ on:
       kernel_sha256: { description: "Image SHA-256", required: true, type: string }
       dtb_url: { description: "system.dtb URL", required: true, type: string }
       dtb_sha256: { description: "system.dtb SHA-256", required: true, type: string }
-      plan: { description: "plan JSON path", default: "examples/plans/band-2400-2500-4slot.json", type: string }
+      plan: { description: "plan JSON path", default: "examples/plans/band-2400-2500-4slot-slow.json", type: string }
   pull_request:
     types: [labeled, synchronize]
   schedule:

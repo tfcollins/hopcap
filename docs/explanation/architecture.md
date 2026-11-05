@@ -7,7 +7,7 @@ hopcap run ── iio_attr ──► axi_timed_command_scheduler_0 @0x86000000
   │ (one hop ahead, readback)           │ gpio_out[3:0] ─► vrt49_fhm_hop_ctrl_0 @0x84AC0000
   │ /dev/mem: slots, SETTLE, CAPTURE          IDLE→DRAIN→SETTLE→PUBLISH→OPEN(capture_ticks)→CLOSED
   │                                           fabric_sample_enable / fabric_context_* ─► axi_vrt49_framer_0
-  ◄── UDP 192.0.2.1:4991 ◄── Corundum QSFP lane 0 ◄── udp_tx ◄── framer (IF Data + Context)
+  ◄── UDP 192.0.2.1:4991 ◄── Corundum SFP+ (or QSFP lane 0) ◄── udp_tx ◄── framer (IF Data + Context)
 ```
 
 The DataX dwell loop maps onto it as:

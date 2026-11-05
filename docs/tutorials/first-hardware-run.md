@@ -9,7 +9,7 @@ evidence directory, a verified boot evidence directory served over HTTP, a reser
    ```sh
    hopcap run --plan examples/plans/band-2400-2500-4slot.json \
      --iio-uri ip:<tron-ip> --target root@<tron-ip> \
-     --bind 192.0.2.2:4991 --rx-interface enp4s0f0np0 --out out/run1 --dry-run
+     --bind 192.0.2.2:4991 --out out/run1 --dry-run   # receiver NIC from VRT49_PHYSICAL_PORT (default sfp)
    ```
 
 2. Run for real, inside the reservation (the board must already be booted on the hopcap image):

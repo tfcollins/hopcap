@@ -1,7 +1,7 @@
 # hopcap
 
 **Hard-timed Talise FHM hop, hardware-settled and gated capture, hop frequency in VITA 49.2
-Context, over 10G QSFP — on the ADRV9009-ZU11EG.**
+Context, over 10G SFP+ or QSFP — on the ADRV9009-ZU11EG.**
 
 ```{admonition} Status
 :class: warning
@@ -16,7 +16,7 @@ open capture):
 
 - [Tick](https://github.com/tfcollins/tick) fires the Talise frequency-hopping-mode (FHM) GPIO at
   an exact device-time tick.
-- [vrt49](https://github.com/tfcollins/vrt49) frames samples as VITA 49.2 over UDP on the QSFP cage.
+- [vrt49](https://github.com/tfcollins/vrt49) frames samples as VITA 49.2 over UDP on the SFP+ or QSFP cage.
 - A new FPGA block, `vrt49_fhm_hop_ctrl`, watches the same Tick edge, drains and settles, hands
   the hop frequency and a hop epoch to the framer as a hardware Context packet, then opens
   sample admission for a fixed capture length.

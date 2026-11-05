@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 /*
- * hopcap overlay for adrv9009zu11eg_vrt49_corundum (QSFP): the Tick scheduler and the
+ * hopcap overlay for adrv9009zu11eg_vrt49_corundum (SFP+ or QSFP): the Tick scheduler and the
  * vrt49_fhm_hop_ctrl block.  Applied with fdtoverlay on top of vrt49's
  * zynqmp-adrv9009zu11eg-vrt49-control-overlay.dts (framer/deframer nodes).
  *
