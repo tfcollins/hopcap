@@ -41,7 +41,7 @@ stock vrt49.
 flowchart TB
     ADC["RX ADC<br/>245.76 MSPS"] -- "JESD204, cpack, FIFO" --> FR["axi_vrt49_framer<br/>IF Data + Context"]
     HOP["hop controller"] -- "sample_enable<br/>rf_frequency, hop_epoch" --> FR
-    FR --> UDP["vrt49_udp_tx<br/>Corundum QSFP lane 0"]
+    FR --> UDP["vrt49_udp_tx<br/>Corundum SFP+ or QSFP lane 0"]
     UDP -- "UDP 192.0.2.1:4991" --> RX["udp_spool on nemo"]
     RX --> AS["associate<br/>SigMF + manifest"]
 ```

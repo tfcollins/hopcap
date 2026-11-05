@@ -20,7 +20,10 @@ def _write(p: Path, data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
-def bitstream_dir(tmp_path: Path, *, timing_ok=True, netlist_ok=True, patch_queue=None) -> Path:
+def bitstream_dir(
+    tmp_path: Path, *, timing_ok=True, netlist_ok=True, patch_queue=None, port=None
+) -> Path:
+    """port=None writes evidence as it was before the port option: no physical_port, QSFP."""
     d = tmp_path / "bitstream"
     d.mkdir()
     bit = _write(d / "system_top.bit", b"BIT" * 100)
@@ -29,11 +32,13 @@ def bitstream_dir(tmp_path: Path, *, timing_ok=True, netlist_ok=True, patch_queu
         "schema": "hopcap-workspace-manifest/v1",
         "pins": PINS,
         "patch_queue": patch_queue or [],
-        "contract_checks": ["configure_dual_talise_links.py", "check-zu11eg-qsfp-contract.py"],
+        "contract_checks": sorted(ve.PORT_CONTRACTS[port or "qsfp"]),
         "adi_hdl_head": PINS["adi_hdl"]["revision"],
         "corundum_head": PINS["corundum"]["revision"],
         "files": {"library/vrt49_fhm_hop_ctrl/vrt49_fhm_hop_ctrl.v": "0" * 64},
     }
+    if port:
+        manifest["physical_port"] = port
     man = _write(d / "MANIFEST.json", json.dumps(manifest).encode())
     (d / "SHA256SUMS").write_text(
         f"{bit}  system_top.bit\n{xsa}  system_top.xsa\n{man}  MANIFEST.json\n"
@@ -45,7 +50,9 @@ def bitstream_dir(tmp_path: Path, *, timing_ok=True, netlist_ok=True, patch_queu
             if timing_ok
             else "check-vivado-timing: FAILED\n"
         )
+        + "check-sfp-rx-netlist: Stock RX DMA connected; SFP taps raw RX0 I/Q and valid: PASS\n"
         + ("check_hop_netlist: OK\n" if netlist_ok else "check_hop_netlist: 2 error(s)\n")
+        + (f"physical_port={port}\n" if port else "")
         + f"adi_hdl={PINS['adi_hdl']['revision']}\ncorundum={PINS['corundum']['revision']}\nhopcap=abc\n"
         + f"bitstream_sha256={bit}\nvivado=vivado v2025.1\n"
     )
@@ -54,6 +61,43 @@ def bitstream_dir(tmp_path: Path, *, timing_ok=True, netlist_ok=True, patch_queu
 
 def test_bitstream_evidence_passes_when_consistent(tmp_path):
     assert ve.verify_bitstream(bitstream_dir(tmp_path)) == []
+
+
+def test_sfp_bitstream_needs_only_the_dual_talise_check(tmp_path):
+    assert ve.verify_bitstream(bitstream_dir(tmp_path, port="sfp")) == []
+
+
+def test_qsfp_bitstream_still_needs_the_qsfp_contract(tmp_path):
+    d = bitstream_dir(tmp_path, port="qsfp")
+    man = json.loads((d / "MANIFEST.json").read_text())
+    man["contract_checks"] = ["configure_dual_talise_links.py"]
+    _rewrite_manifest(d, man)
+    assert any("qsfp contract" in e for e in ve.verify_bitstream(d))
+
+
+def test_summary_and_manifest_must_agree_on_the_port(tmp_path):
+    d = bitstream_dir(tmp_path, port="sfp")
+    (d / "summary.txt").write_text(
+        (d / "summary.txt").read_text().replace("physical_port=sfp", "physical_port=qsfp")
+    )
+    assert any("physical_port" in e for e in ve.verify_bitstream(d))
+
+
+def test_a_failed_rx_netlist_check_fails_the_bitstream(tmp_path):
+    d = bitstream_dir(tmp_path, port="sfp")
+    (d / "summary.txt").write_text(
+        (d / "summary.txt").read_text().replace(": PASS", ": ValueError: tied off")
+    )
+    assert any("check-sfp-rx-netlist" in e for e in ve.verify_bitstream(d))
+
+
+def _rewrite_manifest(d: Path, man: dict) -> None:
+    digest = _write(d / "MANIFEST.json", json.dumps(man).encode())
+    lines = [
+        ln if not ln.endswith("MANIFEST.json") else f"{digest}  MANIFEST.json"
+        for ln in (d / "SHA256SUMS").read_text().splitlines()
+    ]
+    (d / "SHA256SUMS").write_text("\n".join(lines) + "\n")
 
 
 def test_bitstream_evidence_fails_on_hash_mismatch_or_failed_checks(tmp_path):
@@ -76,30 +120,50 @@ def test_bitstream_evidence_rejects_pin_drift(tmp_path):
     assert any("adi_hdl" in e for e in ve.verify_bitstream(d))
 
 
-def boot_dir(tmp_path: Path) -> Path:
-    d = tmp_path / "boot"
+def boot_dir(tmp_path: Path, port=None) -> Path:
+    d = tmp_path / f"boot-{port}"
     d.mkdir()
     sums = {}
     for name in ("BOOT.BIN", "Image", "system.dtb", "hopcap.dtbo", "vrt49-framer-control.dtbo"):
         sums[name] = _write(d / name, name.encode() * 10)
     (d / "SHA256SUMS").write_text("".join(f"{h}  {n}\n" for n, h in sums.items()))
-    (d / "boot-provenance.json").write_text(
-        json.dumps(
-            {
-                "platform": "adrv9009-zu11eg-qsfp",
-                "linux_source_sha": PINS["linux"]["revision"],
-                "qsfp_clock_source": "AD9545_OUT1_B_Q1B",
-                "tick_driver": "in-tree obj-y",
-                "dtb_checks": {
-                    "q1b_output_clk": True,
-                    "tick_node": True,
-                    "hop_node": True,
-                    "framer_node": True,
-                },
-            }
-        )
-    )
+    clock_source, output = ve.PORT_CLOCK[port or "qsfp"]
+    prov = {
+        "platform": f"adrv9009-zu11eg-{port or 'qsfp'}",
+        "linux_source_sha": PINS["linux"]["revision"],
+        f"{port or 'qsfp'}_clock_source": clock_source,
+        "tick_driver": "in-tree obj-y",
+        "dtb_checks": {
+            f"{output}_output_clk": True,
+            "tick_node": True,
+            "hop_node": True,
+            "framer_node": True,
+        },
+    }
+    if port:
+        prov["physical_port"] = port
+    (d / "boot-provenance.json").write_text(json.dumps(prov))
     return d
+
+
+def test_sfp_boot_evidence_requires_the_q1a_refclk(tmp_path):
+    d = boot_dir(tmp_path, "sfp")
+    assert ve.verify_boot(d) == []
+    prov = json.loads((d / "boot-provenance.json").read_text())
+    prov["sfp_clock_source"] = "AD9545_OUT1_B_Q1B"
+    del prov["dtb_checks"]["q1a_output_clk"]
+    prov["dtb_checks"]["q1b_output_clk"] = True
+    (d / "boot-provenance.json").write_text(json.dumps(prov))
+    errs = ve.verify_boot(d)
+    assert any("Q1A" in e for e in errs) and any("q1a_output_clk" in e for e in errs)
+
+
+def test_boot_platform_must_match_the_port(tmp_path):
+    d = boot_dir(tmp_path, "sfp")
+    prov = json.loads((d / "boot-provenance.json").read_text())
+    prov["platform"] = "adrv9009-zu11eg-qsfp"
+    (d / "boot-provenance.json").write_text(json.dumps(prov))
+    assert any("platform" in e for e in ve.verify_boot(d))
 
 
 def test_boot_evidence_passes_and_fails_closed(tmp_path):

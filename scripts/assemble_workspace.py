@@ -8,14 +8,16 @@ vrt49/.github/workflows/hdl-corundum.yml, then adds what the composite needs:
   library/vrt49_fhm_hop_ctrl/                       hopcap IP
   library/axi_timed_command_scheduler/              Tick RTL + IP tcl (module reference)
   projects/adrv9009zu11eg/adrv2crr_fmc/tick_*.tcl   Tick fragment, where Tick's tooling expects it
-  projects/adrv9009zu11eg/adrv2crr_fmc/system_top_corundum.v   Tick's patch_system_top() (TAL_GPIO_0)
+  <port top>.v                                      Tick's patch_system_top() (TAL_GPIO_0) on the top the
+                                                    --port build uses: the vrt49 project's system_top_sfp.v
+                                                    (sfp, default) or ADI's adrv2crr_fmc/system_top_corundum.v (qsfp)
   projects/adrv9009zu11eg_vrt49_corundum/           vrt49 project + system_bd_fabric_hop.tcl, with
                                                     anchored edits to system_project.tcl / system_bd.tcl / Makefile
   overlays/patches/*.patch                          pre-upstream deltas (must be empty for a release build)
   MANIFEST.json                                     SHA-256 of every staged file + pins
 
 Usage:
-  assemble_workspace.py --build-root build/ws [--adi-hdl PATH] [--corundum PATH] [--fetch] [--dry-run]
+  assemble_workspace.py --build-root build/ws [--port sfp|qsfp] [--adi-hdl PATH] [--corundum PATH] [--fetch] [--dry-run]
 """
 
 from __future__ import annotations
@@ -67,6 +69,12 @@ TICK_FRAGMENT_SOURCE = (
     "source $ad_hdl_dir/projects/adrv9009zu11eg/adrv2crr_fmc/tick_adrv9009zu11eg_adrv2crr_fmc.tcl"
 )
 HOP_FRAGMENT_SOURCE = "source system_bd_fabric_hop.tcl"
+PORTS = ("sfp", "qsfp")
+# The top-level each QSFP_ENABLE value builds (vrt49 system_project.tcl): Tick patches that one.
+PORT_TOP = {
+    "sfp": PROJECT_REL / "system_top_sfp.v",
+    "qsfp": ADI_PROJECT_REL / "system_top_corundum.v",
+}
 
 
 class AssembleError(RuntimeError):
@@ -228,7 +236,7 @@ def apply_patch_queue(adi: Path, dry: bool) -> list[str]:
     return applied
 
 
-def staged_files(adi: Path) -> list[Path]:
+def staged_files(adi: Path, port: str = "sfp") -> list[Path]:
     out: list[Path] = []
     for rel in (
         *(Path("library") / ip for ip in VRT49_IPS),
@@ -237,7 +245,7 @@ def staged_files(adi: Path) -> list[Path]:
         TICK_LIB_REL,
         HOP_LIB_REL,
         ADI_PROJECT_REL / "tick_adrv9009zu11eg_adrv2crr_fmc.tcl",
-        ADI_PROJECT_REL / "system_top_corundum.v",
+        PORT_TOP[port],
     ):
         p = adi / rel
         if p.is_file():
@@ -247,13 +255,14 @@ def staged_files(adi: Path) -> list[Path]:
     return out
 
 
-def run_contract_checks(adi: Path) -> list[str]:
-    """The two checks vrt49 CI runs on the staged tree (dual Talise links, QSFP pinout)."""
+def run_contract_checks(adi: Path, port: str = "sfp") -> list[str]:
+    """The checks vrt49 CI runs on the staged tree: dual Talise links always, the QSFP pinout
+    only for a QSFP build (the SFP shell's contracts are vrt49 unit tests on its own tree)."""
     ran = []
-    for script, args in (
-        (VRT49 / "hdl" / PROJECT_REL / "configure_dual_talise_links.py", [str(adi)]),
-        (VRT49 / "scripts" / "check-zu11eg-qsfp-contract.py", [str(adi)]),
-    ):
+    checks = [(VRT49 / "hdl" / PROJECT_REL / "configure_dual_talise_links.py", [str(adi)])]
+    if port == "qsfp":
+        checks.append((VRT49 / "scripts" / "check-zu11eg-qsfp-contract.py", [str(adi)]))
+    for script, args in checks:
         r = subprocess.run([sys.executable, str(script), *args], capture_output=True, text=True)
         if r.returncode != 0:
             raise AssembleError(f"{script.name} failed:\n{r.stdout}{r.stderr}")
@@ -271,7 +280,10 @@ def assemble(
     fetch: bool = False,
     dry_run: bool = False,
     contract_checks: bool = True,
+    port: str = "sfp",
 ) -> dict:
+    if port not in PORTS:
+        raise AssembleError(f"port must be one of {PORTS}, not {port!r}")
     pins = load_pins()
     verify_submodules(pins)
     build_root = Path(build_root)
@@ -318,7 +330,7 @@ def assemble(
         dry_run,
     )
 
-    # Tick: RTL + IP tcl + fragment, then its own system_top patch on the Corundum top
+    # Tick: RTL + IP tcl + fragment, then its own system_top patch on the port's top
     tick_lib = TICK / "hdl" / TICK_LIB_REL
     stage_file(
         tick_lib / "axi_timed_command_scheduler.v",
@@ -338,11 +350,9 @@ def assemble(
     sys.path.insert(0, str(TICK / "scripts"))
     import prepare_adi_hdl_adrv9009 as tick_prep
 
-    top = adi / ADI_PROJECT_REL / "system_top_corundum.v"
-    if not top.exists():
-        raise AssembleError(
-            f"{top} missing: ADI tree is not a Corundum-capable adrv2crr_fmc project"
-        )
+    top = adi / PORT_TOP[port]
+    if not top.exists() and not dry_run:
+        raise AssembleError(f"{top} missing: no {port} top-level to carry the Tick FHM GPIO")
     log(f"patch_system_top {top}")
     if not dry_run:
         try:
@@ -357,10 +367,11 @@ def assemble(
         edit(adi / PROJECT_REL / "Makefile", patch_makefile, dry_run)
 
     queue = apply_patch_queue(adi, dry_run)
-    checks = run_contract_checks(adi) if (contract_checks and not dry_run) else []
+    checks = run_contract_checks(adi, port) if (contract_checks and not dry_run) else []
 
     manifest = {
         "schema": "hopcap-workspace-manifest/v1",
+        "physical_port": port,
         "pins": pins,
         "submodules": {
             "tick": git(TICK, "rev-parse", "HEAD"),
@@ -370,7 +381,9 @@ def assemble(
         "corundum_head": git(cor, "rev-parse", "HEAD"),
         "patch_queue": queue,
         "contract_checks": checks,
-        "files": {} if dry_run else {str(p.relative_to(adi)): sha256(p) for p in staged_files(adi)},
+        "files": {}
+        if dry_run
+        else {str(p.relative_to(adi)): sha256(p) for p in staged_files(adi, port)},
     }
     if not dry_run:
         (build_root / "MANIFEST.json").write_text(json.dumps(manifest, indent=2) + "\n")
@@ -383,6 +396,12 @@ def main(argv: list[str] | None = None) -> int:
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
     ap.add_argument("--build-root", type=Path, default=ROOT / "build" / "ws")
+    ap.add_argument(
+        "--port",
+        choices=PORTS,
+        default="sfp",
+        help="cage the bitstream drives: sfp (SFP+ cage, default) or qsfp (QSFP lane 0)",
+    )
     ap.add_argument(
         "--adi-hdl",
         type=Path,
@@ -398,7 +417,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     ap.add_argument("--no-pin-check", action="store_true")
     ap.add_argument(
-        "--no-contract-checks", action="store_true", help="skip vrt49's dual-Talise/QSFP checks"
+        "--no-contract-checks", action="store_true", help="skip vrt49's staged-tree checks"
     )
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args(argv)
@@ -411,6 +430,7 @@ def main(argv: list[str] | None = None) -> int:
             fetch=args.fetch,
             dry_run=args.dry_run,
             contract_checks=not args.no_contract_checks,
+            port=args.port,
         )
     except AssembleError as exc:
         print(f"assemble: error: {exc}", file=sys.stderr)

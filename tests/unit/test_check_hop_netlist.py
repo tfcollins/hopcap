@@ -7,6 +7,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "scripts"))
 import check_hop_netlist as chn  # noqa: E402
+import pytest  # noqa: E402
 
 
 def _tree(tmp_path, netlist: str, top: str):
@@ -44,3 +45,27 @@ def test_fails_when_controller_missing_or_top_unpatched(tmp_path):
     )
     errs = chn.check(proj, top)
     assert any("vrt49_fhm_hop_ctrl" in e for e in errs) and any("DATA_WIDTH(60)" in e for e in errs)
+
+
+def test_port_tops_match_the_assembler():
+    """The netlist check must read the same top-level the assembler patched for each port."""
+    import assemble_workspace as aw
+
+    assert {k: str(v) for k, v in aw.PORT_TOP.items()} == chn.PORT_TOP
+
+
+@pytest.mark.parametrize("port", ["sfp", "qsfp"])
+def test_cli_checks_the_ports_top(tmp_path, port):
+    import subprocess
+
+    proj = tmp_path / "projects/adrv9009zu11eg_vrt49_corundum"
+    (proj / "synth").mkdir(parents=True)
+    (proj / "synth/system.v").write_text(GOOD_NET)
+    for p, top in chn.PORT_TOP.items():
+        (tmp_path / top).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / top).write_text(GOOD_TOP if p == port else "module system_top; endmodule")
+    script = Path(chn.__file__)
+    ok = subprocess.run([sys.executable, str(script), str(tmp_path), "--port", port])
+    other = "qsfp" if port == "sfp" else "sfp"
+    bad = subprocess.run([sys.executable, str(script), str(tmp_path), "--port", other])
+    assert ok.returncode == 0 and bad.returncode == 1

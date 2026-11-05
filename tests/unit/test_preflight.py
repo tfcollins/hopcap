@@ -10,6 +10,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from hopcap import link
 from hopcap.lab import preflight
 
 # Shape of `labgrid-client -p tron show`: the resource params after the place section carry the
@@ -26,9 +27,13 @@ SHOW = (
 )
 
 
-def fake_net(tmp_path: Path, *, mac="64:9d:99:6f:a9:6a", driver="i40e", operstate="up") -> Path:
+def fake_net(
+    tmp_path: Path, *, port="sfp", mac=None, driver=None, operstate="up", name=None
+) -> Path:
+    rx = link.RECEIVERS[port]
+    mac, driver = mac or rx.mac, driver or rx.driver
     root = tmp_path / "net"
-    iface = root / "enp4s0f0np0"
+    iface = root / (name or rx.interface)
     (iface / "device").mkdir(parents=True)
     (iface / "address").write_text(mac + "\n")
     (iface / "operstate").write_text(operstate + "\n")
@@ -40,25 +45,42 @@ def fake_net(tmp_path: Path, *, mac="64:9d:99:6f:a9:6a", driver="i40e", operstat
     return root
 
 
-def test_receiver_interface_found_by_mac_and_driver(tmp_path):
-    root = fake_net(tmp_path)
-    r = preflight.receiver_interface(root)
+@pytest.mark.parametrize(
+    ("port", "interface", "driver"),
+    [("sfp", "enp2s0", "ixgbe"), ("qsfp", "enp4s0f0np0", "i40e")],
+)
+def test_receiver_interface_found_by_mac_and_driver(tmp_path, port, interface, driver):
+    root = fake_net(tmp_path, port=port)
+    r = preflight.receiver_interface(root, port=port)
     assert (
         r["ok"]
-        and r["interface"] == "enp4s0f0np0"
-        and r["driver"] == "i40e"
+        and r["port"] == port
+        and r["interface"] == interface
+        and r["driver"] == driver
         and r["operstate"] == "up"
     )
 
 
+def test_receiver_follows_the_physical_port_variable(tmp_path, monkeypatch):
+    """hw-test.yml sets VRT49_PHYSICAL_PORT; preflight must look for that port's NIC, not the other."""
+    root = fake_net(tmp_path, port="qsfp")
+    monkeypatch.setenv("VRT49_PHYSICAL_PORT", "sfp")
+    assert preflight.receiver_interface(root)["ok"] is False
+    monkeypatch.setenv("VRT49_PHYSICAL_PORT", "qsfp")
+    assert preflight.receiver_interface(root)["ok"] is True
+    monkeypatch.setenv("VRT49_PHYSICAL_PORT", "usb")
+    with pytest.raises(link.PortError):
+        preflight.receiver_interface(root)
+
+
 def test_receiver_interface_fails_closed_on_missing_mac_or_link_down(tmp_path):
     root = fake_net(tmp_path, mac="00:11:22:33:44:55")
-    assert preflight.receiver_interface(root)["ok"] is False
+    assert preflight.receiver_interface(root, port="sfp")["ok"] is False
     root = fake_net(tmp_path / "b", operstate="down")
-    r = preflight.receiver_interface(root)
+    r = preflight.receiver_interface(root, port="sfp")
     assert r["ok"] is True and r["link_up"] is False, "link down is reported, not gated"
-    root = fake_net(tmp_path / "c", driver="ixgbe")
-    assert preflight.receiver_interface(root)["ok"] is False
+    root = fake_net(tmp_path / "c", driver="i40e")
+    assert preflight.receiver_interface(root, port="sfp")["ok"] is False
 
 
 def test_address_check_requires_receiver_interface_or_rp_filter_zero():
@@ -95,9 +117,10 @@ def test_rp_filter_is_the_effective_max_of_all_and_interface(tmp_path):
 
 def test_address_remedy_names_both_rp_filter_keys():
     other = "2: enp2s0    inet 192.0.2.2/24 brd 192.0.2.255 scope global enp2s0\n"
-    r = preflight.validate_receiver_address(other, "enp4s0f0np0", 2)
+    r = preflight.validate_receiver_address(other, "enp4s0f0np0", 2, nm_profile="vrt49-qsfp")
     assert "net.ipv4.conf.all.rp_filter=0" in r["note"]
     assert "net.ipv4.conf.enp4s0f0np0.rp_filter=0" in r["note"]
+    assert "nmcli con up vrt49-qsfp" in r["note"]
 
 
 def test_place_tags_are_matched_exactly():

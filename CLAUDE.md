@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-A composite example repo: Tick (hard-timed FHM GPIO hop) + vrt49 (VITA 49.2 over 10G QSFP) on the
+A composite example repo: Tick (hard-timed FHM GPIO hop) + vrt49 (VITA 49.2 over 10G SFP+/QSFP) on the
 ADRV9009-ZU11EG, joined by a new FPGA block `vrt49_fhm_hop_ctrl` that gates capture after a settle
 delay and stamps the hop frequency + epoch into a hardware-emitted Context packet. Design document:
 `docs/superpowers/specs/2026-10-23-hopcap-design.md` (read it before touching the architecture).
@@ -46,6 +46,10 @@ cmake -S third_party/vrt49 -B build/vrt49 -DVRT49_BUILD_TOOLS=OFF -DVRT49_BUILD_
 
 ## Lab facts (verify in `~/dev/infra/HOSTS.md` before use)
 
-Place `tron` (ADRV9009-ZU11EG), QSFP lane 0 ↔ nemo XL710 `enp4s0f0np0` 192.0.2.2, FPGA 192.0.2.1:4991.
+Place `tron` (ADRV9009-ZU11EG). The cage is a build-time choice (`--port`, `VRT49_PHYSICAL_PORT`,
+default `sfp`; receivers in `src/hopcap/link.py`): SFP+ ↔ nemo 82599 `enp2s0` (cabled since
+2026-11-05), or QSFP lane 0 ↔ nemo XL710 `enp4s0f0np0` (that cage now carries mini2's breakout, so
+`qsfp` needs tron's DAC moved back). nemo 192.0.2.2, FPGA 192.0.2.1:4991. Dispatch hw-test with the
+`-slow` plan (the default): the 50 ms plan is below the staging floor on tron's serial control path.
 Coordinator 10.0.0.41:20408. Shares `/tmp/vrt49-corundum-hardware.lock` with vrt49. Never reprogram
 the PL at runtime (kills JESD); boot-resident images only.

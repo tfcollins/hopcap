@@ -98,7 +98,14 @@ def fake_tree(tmp_path: Path) -> dict:
     return {"adi": adi, "corundum": corundum, "root": tmp_path}
 
 
-def test_assemble_stages_everything_and_patches_the_project(fake_tree):
+PORT_TOPS = {
+    "sfp": PROJECT_REL / "system_top_sfp.v",
+    "qsfp": ADI_PROJECT_REL / "system_top_corundum.v",
+}
+
+
+@pytest.mark.parametrize("port", ["sfp", "qsfp"])
+def test_assemble_stages_everything_and_patches_the_project(fake_tree, port):
     adi = fake_tree["adi"]
     manifest = aw.assemble(
         fake_tree["root"],
@@ -106,6 +113,7 @@ def test_assemble_stages_everything_and_patches_the_project(fake_tree):
         corundum=fake_tree["corundum"],
         check_pins=False,
         contract_checks=False,
+        port=port,
     )
     # vrt49 IP + project staged
     assert (adi / "library/axi_vrt49_framer/axi_vrt49_framer.v").exists()
@@ -121,10 +129,13 @@ def test_assemble_stages_everything_and_patches_the_project(fake_tree):
     # Tick RTL + fragment where Tick's own tooling expects them
     assert (adi / "library/axi_timed_command_scheduler/axi_timed_command_scheduler.v").exists()
     assert (adi / ADI_PROJECT_REL / "tick_adrv9009zu11eg_adrv2crr_fmc.tcl").exists()
-    # system_top_corundum.v patched exactly like Tick does for system_top.v
-    top = (adi / ADI_PROJECT_REL / "system_top_corundum.v").read_text()
+    # the top-level this port builds is patched exactly like Tick does for system_top.v, and
+    # only that one: the other port's top must stay as its source tree has it
+    top = (adi / PORT_TOPS[port]).read_text()
     assert "assign adrv9009_gpio_00_a = tick_fhm_gpio[0];" in top
     assert ".DATA_WIDTH(60)" in top and ".tick_fhm_gpio (tick_fhm_gpio)," in top
+    other = adi / PORT_TOPS["qsfp" if port == "sfp" else "sfp"]
+    assert "tick_fhm_gpio" not in other.read_text()
     # project edits
     sp = (adi / PROJECT_REL / "system_project.tcl").read_text()
     assert '"../../library/axi_timed_command_scheduler/axi_timed_command_scheduler.v"' in sp
@@ -143,8 +154,41 @@ def test_assemble_stages_everything_and_patches_the_project(fake_tree):
     # manifest
     assert manifest["pins"]["adi_hdl"]["revision"]
     assert manifest["files"]["library/vrt49_fhm_hop_ctrl/vrt49_fhm_hop_ctrl.v"]
-    assert manifest["files"][str(ADI_PROJECT_REL / "system_top_corundum.v")]
-    assert (fake_tree["root"] / "MANIFEST.json").exists()
+    assert manifest["files"][str(PORT_TOPS[port])]
+    assert manifest["physical_port"] == port
+    assert json.loads((fake_tree["root"] / "MANIFEST.json").read_text())["physical_port"] == port
+
+
+def test_unknown_port_is_refused(fake_tree):
+    with pytest.raises(aw.AssembleError, match="port"):
+        aw.assemble(
+            fake_tree["root"],
+            adi_hdl=fake_tree["adi"],
+            corundum=fake_tree["corundum"],
+            check_pins=False,
+            contract_checks=False,
+            port="usb",
+        )
+
+
+@pytest.mark.parametrize(
+    ("port", "expected"),
+    [
+        ("sfp", ["configure_dual_talise_links.py"]),
+        ("qsfp", ["configure_dual_talise_links.py", "check-zu11eg-qsfp-contract.py"]),
+    ],
+)
+def test_contract_checks_follow_the_port(monkeypatch, tmp_path, port, expected):
+    """The QSFP pinout check would fail on an SFP build's staged tree; it runs only for qsfp."""
+    calls = []
+
+    def run(argv, **kw):
+        calls.append(Path(argv[1]).name)
+        return subprocess.CompletedProcess(argv, 0, stdout="ok\n", stderr="")
+
+    monkeypatch.setattr(aw.subprocess, "run", run)
+    assert aw.run_contract_checks(tmp_path, port) == expected
+    assert calls == expected
 
 
 def test_assemble_is_idempotent(fake_tree):

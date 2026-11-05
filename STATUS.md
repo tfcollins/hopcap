@@ -1,4 +1,19 @@
-# STATUS — 2026-10-26 — END TO END on tron with real VRT timestamps: Tick→FHM→hop controller→Context→QSFP→host captures tagged with hop frequency, sample-exact timestamps
+# STATUS — 2026-11-05 — END TO END on tron over SFP+ (default port) with real VRT timestamps: Tick→FHM→hop controller→Context→SFP+→nemo 82599 captures tagged with hop frequency; QSFP lane 0 still selectable
+
+## Physical port parameter (2026-11-05) — SFP+ default, 4/4 on tron
+datax_sdk_sdr#25 gave nemo's XL710 QSFP cage to mini2's 4x10G breakout and cabled tron's SFP+ cage to
+nemo's 82599 `enp2s0`. The cage is now a build parameter (`--port sfp|qsfp`, `VRT49_PHYSICAL_PORT`,
+receivers in `src/hopcap/link.py`): assembler, bitstream, boot set (Q1A vs Q1B refclk), evidence
+checks, preflight, framer MAC, CLI and hw-test all follow it.
+- Bitstream (hdl-dev-2, `physical_port=sfp`, hopcap 76cdc95): routed WNS +0.173 ns, WHS +0.010 ns;
+  SFP RX-tap and hop netlist checks PASS; bitstream sha256 `3a24e0c3…62c5`, XSA `dc3f4265…1d771a84`.
+- Boot set: `verify_evidence boot` OK (Image `18e592b5…`, system.dtb `1acf636a…`).
+- hw-test 42072932538 (JTAG boot, `-slow` plan): 4/4. Run 42070293721 on the same artifacts failed
+  only `test_hop_capture_plan`: dispatched with the 50 ms default plan, below the 6×RTT staging
+  floor (RTT 24 ms that run). hw-test now defaults to the `-slow` plan.
+
+## Previous headline (2026-10-26)
+STATUS — 2026-10-26 — END TO END on tron with real VRT timestamps: Tick→FHM→hop controller→Context→QSFP→host captures tagged with hop frequency, sample-exact timestamps
 
 Plan: `docs/superpowers/specs/2026-10-23-hopcap-design.md`. Ledger of rulings in the commit history.
 

@@ -5,8 +5,10 @@
 #   scripts/run-tron-hopcap.sh --artifacts ~/hopcap-artifacts/boot-attempt3 --url http://10.0.0.71:8749/boot-attempt3 \
 #                              --out ~/hopcap-artifacts/run-<stamp> [--plan examples/plans/band-2400-2500-4slot.json] \
 #                              [--nm-qsfp vrt49-qsfp --nm-sfp vrt49-sfp] [--python ~/hopcap-venv/bin/python]
-#                              [--boot auto|jtag|sd] [--xsa system_top.xsa]
+#                              [--boot auto|jtag|sd] [--xsa system_top.xsa] [--port sfp|qsfp]
 #
+# --port (default: $VRT49_PHYSICAL_PORT, else sfp) is the cage the artifacts were built for; the
+# receiver NIC follows it (hopcap.link: sfp -> enp2s0, qsfp -> enp4s0f0np0).
 # --boot auto (default) follows the labgrid place's boot-mode tag (jtag|sd), the lab's record of how
 # tron's boot-mode switches are set; with no tag, jtag (the setup since 2026-10-25) is assumed. Both
 # paths run under boot-strategy=BootZynqMPJTAG. An explicit --boot wins over the tag, with a
@@ -18,14 +20,15 @@
 # board strapped for SD boot.
 #
 # Derives the VRT49_CORUNDUM_*_URL/_SHA256 variables from the artifact directory's SHA256SUMS,
-# brings the QSFP receiver profile up (and the SFP one down, they share 192.0.2.2) for the
-# session and restores both afterwards, then runs examples/hardware/zu11eg_hopcap.py --run,
+# makes sure 192.0.2.2/24 sits on the port's receiver NIC (for qsfp: brings the QSFP profile up
+# and the SFP one down, they share the address, and restores both afterwards), then runs examples/hardware/zu11eg_hopcap.py --run,
 # which reserves tron via adi-lg, boots the exact artifacts, runs tests/hardware and verifies
 # the evidence bundle.  Recipe mirrors vrt49's 2026-10-21 QSFP qualification run.
 set -euo pipefail
 here=$(cd "$(dirname "$0")/.." && pwd)
 artifacts=""; url=""; out=""; plan="examples/plans/band-2400-2500-4slot.json"
 nm_qsfp=""; nm_sfp=""; py=python3; wait_s=900; boot=auto; xsa=""; exporter=tron.local
+port=${VRT49_PHYSICAL_PORT:-sfp}
 while [ $# -gt 0 ]; do
   case "$1" in
     --artifacts) artifacts=$2; shift 2 ;;
@@ -38,12 +41,15 @@ while [ $# -gt 0 ]; do
     --wait) wait_s=$2; shift 2 ;;
     --boot) boot=$2; shift 2 ;;
     --xsa) xsa=$2; shift 2 ;;
+    --port) port=$2; shift 2 ;;
     -h|--help) sed -n 2,22p "$0"; exit 0 ;;
     *) echo "unknown arg $1" >&2; exit 2 ;;
   esac
 done
 test -n "$artifacts" -a -n "$url" -a -n "$out" || { echo "--artifacts, --url and --out are required" >&2; exit 2; }
 case "$boot" in auto|sd|jtag) ;; *) echo "--boot must be auto, jtag or sd" >&2; exit 2 ;; esac
+case "$port" in sfp|qsfp) ;; *) echo "--port must be sfp or qsfp" >&2; exit 2 ;; esac
+rx_iface=$(VRT49_PHYSICAL_PORT=$port PYTHONPATH="$here/src" "$py" -c "from hopcap import link; print(link.receiver().interface)")
 # "<mode> <source>" from the place tags; empty when labgrid can't say (auto prints why).
 boot_tag() { PYTHONPATH="$here/src" "$py" -m hopcap.lab.preflight --boot-mode; }
 if [ "$boot" = auto ]; then
@@ -71,11 +77,11 @@ for f in BOOT.BIN Image system.dtb; do
   test -n "$(sha $f)" || { echo "$f missing from $sums" >&2; exit 2; }
   curl -sf -o /dev/null "$url/$f" || { echo "$url/$f not reachable" >&2; exit 2; }
 done
-export VRT49_CORUNDUM_BOOT=$boot HOPCAP_BOOT_SOURCE="$boot_source" VRT49_PHYSICAL_PORT=qsfp
+export VRT49_CORUNDUM_BOOT=$boot HOPCAP_BOOT_SOURCE="$boot_source" VRT49_PHYSICAL_PORT=$port
 export VRT49_CORUNDUM_BOOT_BIN_URL="$url/BOOT.BIN" VRT49_CORUNDUM_BOOT_BIN_SHA256="$(sha BOOT.BIN)"
 export VRT49_CORUNDUM_KERNEL_URL="$url/Image" VRT49_CORUNDUM_KERNEL_SHA256="$(sha Image)"
 export VRT49_CORUNDUM_DTB_URL="$url/system.dtb" VRT49_CORUNDUM_DTB_SHA256="$(sha system.dtb)"
-export HOPCAP_PLAN="$plan" HOPCAP_OUT="$out" HOPCAP_RX_INTERFACE="${HOPCAP_RX_INTERFACE:-enp4s0f0np0}"
+export HOPCAP_PLAN="$plan" HOPCAP_OUT="$out" HOPCAP_RX_INTERFACE="${HOPCAP_RX_INTERFACE:-$rx_iface}"
 export HOPCAP_COMMIT="$(git -C "$here" rev-parse HEAD)"
 export LG_COORDINATOR=10.0.0.41:20408 ADI_LG_COORDINATOR=10.0.0.41:20408
 mkdir -p "$out"
@@ -95,9 +101,10 @@ if [ "$boot" = jtag ]; then
   export VRT49_CORUNDUM_BITSTREAM_REMOTE="$jtag_remote/system_top.bit" \
          VRT49_CORUNDUM_PSU_INIT_REMOTE="$jtag_remote/psu_init.tcl"
 fi
-# The XL710 has no carrier until the FPGA drives the QSFP lane (after the image under test
-# boots), and NetworkManager refuses to activate an ethernet profile without carrier.  Take the
-# SFP profile down (it owns the same 192.0.2.2), try the QSFP profile, and otherwise put the
+# sfp: the vrt49-sfp profile owns 192.0.2.2/24 on enp2s0 with ignore-carrier, so it only needs to
+# be up. qsfp: the XL710 has no carrier until the FPGA drives the QSFP lane (after the image under
+# test boots), and NetworkManager refuses to activate an ethernet profile without carrier.  Take
+# the SFP profile down (it owns the same 192.0.2.2), try the QSFP profile, and otherwise put the
 # address on the interface directly; both paths are undone on exit.
 addr_added=0
 restore_nm() {
@@ -106,7 +113,10 @@ restore_nm() {
   if [ -n "$nm_qsfp" ]; then nmcli con down "$nm_qsfp" >/dev/null 2>&1 || true; fi
   if [ -n "$nm_sfp" ]; then nmcli con up "$nm_sfp" >/dev/null 2>&1 || true; fi
 }
-if [ -n "$nm_qsfp" ]; then
+if [ "$port" = sfp ] && [ -n "$nm_sfp" ]; then
+  nmcli con up "$nm_sfp" >/dev/null 2>&1 || echo "WARNING: nmcli could not activate $nm_sfp" >&2
+fi
+if [ "$port" = qsfp ] && [ -n "$nm_qsfp" ]; then
   trap restore_nm EXIT
   [ -n "$nm_sfp" ] && nmcli con down "$nm_sfp" >/dev/null 2>&1 || true
   if ! nmcli con up "$nm_qsfp" >/dev/null 2>&1; then
@@ -115,9 +125,9 @@ if [ -n "$nm_qsfp" ]; then
     sudo -n ip addr replace 192.0.2.2/24 dev "$HOPCAP_RX_INTERFACE"
     addr_added=1
   fi
-  ip -4 -o addr show dev "$HOPCAP_RX_INTERFACE" | tee "$out/receiver-nic.txt"
-  grep -q "192.0.2.2/24" "$out/receiver-nic.txt" || { echo "receiver address not set" >&2; exit 1; }
 fi
+ip -4 -o addr show dev "$HOPCAP_RX_INTERFACE" | tee "$out/receiver-nic.txt"
+grep -q "192.0.2.2/24" "$out/receiver-nic.txt" || { echo "192.0.2.2/24 is not on $HOPCAP_RX_INTERFACE ($port)" >&2; exit 1; }
 cd "$here"
 # adi-lg and labgrid-client must come from the same environment as the pinned labgrid-plugins
 export PATH="$(cd "$(dirname "$(command -v "$py")")" && pwd):$PATH"

@@ -1,6 +1,6 @@
 # hopcap — hard-timed FHM hop, settled capture, hop frequency in VRT49 Context
 
-**Status: end to end on `tron` (2026-10-26): Tick-timed FHM hop, hardware-gated VRT49 capture over QSFP, sample-exact VRT timestamps; nightly HIL. Talise settle time is still a configured knob, not a measurement. See `STATUS.md`.**
+**Status: end to end on `tron` (2026-10-26): Tick-timed FHM hop, hardware-gated VRT49 capture over 10G (SFP+ by default since 2026-11-05, QSFP lane 0 selectable), sample-exact VRT timestamps; hardware runs by dispatch. Talise settle time is still a configured knob, not a measurement. See `STATUS.md`.**
 
 Composite example for the ADRV9009-ZU11EG (ADRV2CRR-FMC carrier). It assembles
 [Tick](https://github.com/tfcollins/tick) and [vrt49](https://github.com/tfcollins/vrt49)
@@ -12,7 +12,8 @@ into one bitstream plus a host runner so that:
    admission, waits a configurable settle time, emits a VITA 49.2 Context packet
    carrying the hop RF frequency and a hop epoch, opens admission for a
    configurable capture length, then closes again.
-3. IF Data and Context leave over the vrt49 10G UDP path on QSFP lane 0.
+3. IF Data and Context leave over the vrt49 10G UDP path on the SFP+ cage (default) or QSFP
+   lane 0, chosen at build time with `--port` (`docs/how-to/build.md`).
 4. The host spools the stream, tags each capture with its Context, and writes
    SigMF plus an evidence bundle.
 

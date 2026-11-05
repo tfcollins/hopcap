@@ -129,7 +129,11 @@ def cmd_run(args) -> int:
     plan, fs = load_plan(args.plan, tick_hz=args.tick_hz)
     plan = _apply_overrides(plan, args, fs=fs, tick_hz=args.tick_hz)
     host, port = args.bind.rsplit(":", 1)
-    fcfg = framer_mod.FramerConfig(dest_ip=host, dest_port=int(port), dest_mac=args.dest_mac)
+    from hopcap import link
+
+    dest_mac = args.dest_mac or link.receiver().mac
+    args.rx_interface = args.rx_interface or link.receiver().interface
+    fcfg = framer_mod.FramerConfig(dest_ip=host, dest_port=int(port), dest_mac=dest_mac)
     board_ip = (
         args.iio_uri.split(":", 1)[1]
         if args.iio_uri.startswith("ip:")
@@ -269,9 +273,17 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("--iio-uri", required=True, help="e.g. ip:10.0.0.79")
     r.add_argument("--target", required=True, help="ssh target, e.g. root@10.0.0.79")
     r.add_argument("--bind", default="192.0.2.2:4991")
-    r.add_argument("--rx-interface", default="enp4s0f0np0")
+    r.add_argument(
+        "--rx-interface",
+        default=None,
+        help="receiver NIC (default: nemo's NIC for VRT49_PHYSICAL_PORT, see hopcap.link)",
+    )
     r.add_argument("--rx-cpu", type=int)
-    r.add_argument("--dest-mac", default="64:9d:99:6f:a9:6a")
+    r.add_argument(
+        "--dest-mac",
+        default=None,
+        help="receiver MAC (default: nemo's NIC for VRT49_PHYSICAL_PORT, see hopcap.link)",
+    )
     r.add_argument("--hopctrl-base", type=lambda v: int(v, 0), default=0x84AC0000)
     r.add_argument("--receiver", choices=("c", "python"), default="c")
     r.add_argument("--lookahead", type=int, default=4)

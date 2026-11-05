@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: MIT
 """Read-only nemo-side gate for a hopcap hardware run (shape follows vrt49's
-scripts/preflight-zu11eg-hil.py). Checks the XL710 QSFP receiver NIC, its 192.0.2.2/24
-address, the labgrid place tags, the shared hardware lock and coordinator reachability.
+scripts/preflight-zu11eg-hil.py). Checks nemo's receiver NIC for the physical port
+(``VRT49_PHYSICAL_PORT``, see :mod:`hopcap.link`), its 192.0.2.2/24 address, the labgrid place tags, the shared hardware lock and coordinator reachability.
 Never acquires, boots or changes links.
 
 `--boot-mode` prints only `<jtag|sd> <where that came from>`. The place's `boot-mode` tag is the
@@ -23,6 +23,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from hopcap import link
+
 COORDINATOR = "10.0.0.41:20408"
 PLACE = "tron"
 TAGS = {"daughter-board": "adrv9009zu11eg", "carrier": "adrv2crr-fmc", "runner": "hw-nemo"}
@@ -31,41 +33,46 @@ TAGS = {"daughter-board": "adrv9009zu11eg", "carrier": "adrv2crr-fmc", "runner":
 BOOT_STRATEGY = "BootZynqMPJTAG"
 BOOT_MODES = ("jtag", "sd")
 ASSUMED_MODE = "jtag"
-RECEIVER_MAC = "64:9d:99:6f:a9:6a"  # nemo XL710 enp4s0f0np0 (QSFP lane-0 DAC to tron)
-RECEIVER_DRIVER = "i40e"
 RECEIVER_IPV4 = "192.0.2.2/24"
 LOCK = Path("/tmp/vrt49-corundum-hardware.lock")
 
 
-def receiver_interface(root: Path = Path("/sys/class/net")) -> dict:
+def receiver_interface(root: Path = Path("/sys/class/net"), port: str | None = None) -> dict:
+    rx = link.receiver(port)
     for iface in sorted(p for p in root.iterdir() if p.is_dir()):
         addr = iface / "address"
-        if not addr.exists() or addr.read_text().strip().lower() != RECEIVER_MAC:
+        if not addr.exists() or addr.read_text().strip().lower() != rx.mac:
             continue
         driver_link = iface / "device" / "driver"
         driver = os.path.basename(os.readlink(driver_link)) if driver_link.is_symlink() else None
         operstate = (
             (iface / "operstate").read_text().strip() if (iface / "operstate").exists() else None
         )
-        # Link state is reported, not gated: the QSFP carrier only exists while the FPGA drives
+        # Link state is reported, not gated: the cage's carrier only exists while the FPGA drives
         # it, i.e. after the board has booted the image under test.
         return {
-            "ok": driver == RECEIVER_DRIVER,
+            "ok": driver == rx.driver,
+            "port": rx.port,
             "interface": iface.name,
-            "mac": RECEIVER_MAC,
+            "expected_interface": rx.interface,
+            "mac": rx.mac,
             "driver": driver,
             "operstate": operstate,
             "link_up": operstate == "up",
         }
     return {
         "ok": False,
+        "port": rx.port,
         "interface": None,
-        "mac": RECEIVER_MAC,
+        "expected_interface": rx.interface,
+        "mac": rx.mac,
         "reason": "no interface with the receiver MAC",
     }
 
 
-def validate_receiver_address(raw: str, interface: str, rp_filter: int | None = None) -> dict:
+def validate_receiver_address(
+    raw: str, interface: str, rp_filter: int | None = None, nm_profile: str = "vrt49-sfp"
+) -> dict:
     """192.0.2.2/24 must be deliverable to a socket from datagrams arriving on the receiver NIC.
 
     Either the address sits on the receiver interface itself, or (weak host model) it sits on
@@ -89,7 +96,7 @@ def validate_receiver_address(raw: str, interface: str, rp_filter: int | None = 
             f"the kernel will drop every datagram arriving on {interface}. The effective value is "
             f"max(all, {interface}), so fix (root, persist in /etc/sysctl.d): "
             f"`sysctl -w net.ipv4.conf.all.rp_filter=0 net.ipv4.conf.{interface}.rp_filter=0`, "
-            "or `nmcli con up vrt49-qsfp` while the link is up"
+            f"or `nmcli con up {nm_profile}` while the link is up"
         )
     else:
         note = f"{RECEIVER_IPV4} is not configured on any interface"
@@ -241,9 +248,12 @@ def summarize(sections: dict) -> dict:
     return {"ok": ok, **sections}
 
 
-def preflight(*, labgrid_client: str | None = None, timeout: float = 15.0) -> dict:
+def preflight(
+    *, labgrid_client: str | None = None, timeout: float = 15.0, port: str | None = None
+) -> dict:
     sections: dict = {}
-    sections["receiver"] = receiver_interface()
+    rx = link.receiver(port)
+    sections["receiver"] = receiver_interface(port=rx.port)
     iface = sections["receiver"].get("interface")
     if iface:
         try:
@@ -253,7 +263,9 @@ def preflight(*, labgrid_client: str | None = None, timeout: float = 15.0) -> di
         except (OSError, subprocess.TimeoutExpired):
             raw = ""
         rp = read_rp_filter(iface)
-        sections["address"] = validate_receiver_address(raw, iface, rp and rp["effective"])
+        sections["address"] = validate_receiver_address(
+            raw, iface, rp and rp["effective"], nm_profile=rx.nm_profile
+        )
         sections["address"]["rp_filter_keys"] = rp
     else:
         sections["address"] = {"ok": False, "reason": "no receiver interface"}
