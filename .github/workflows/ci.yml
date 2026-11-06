@@ -81,10 +81,12 @@ jobs:
         run: make -C hdl/sim/cocotb TOP=vrt49_fhm_hop_ctrl
       - name: Controller + framer chain
         run: make -C hdl/sim/cocotb TOP=fhm_hop_chain
+      - name: Tick PPS selector suite
+        run: make -C hdl/sim/cocotb TOP=tick_pps_select
       - name: No cocotb failures
         # cocotb 1.9's results.xml has no failures= attribute: a failed test is a <failure/> child.
         run: |
-          for top in fhm_hop_chain vrt49_fhm_hop_ctrl; do
+          for top in fhm_hop_chain vrt49_fhm_hop_ctrl tick_pps_select; do
             f=hdl/sim/cocotb/results_$top.xml
             grep -q '<testcase ' "$f" || { echo "no testcases in $f" >&2; exit 1; }
             if grep -qE '<(failure|error)[ />]' "$f"; then echo "failures in $f" >&2; exit 1; fi
@@ -115,6 +117,8 @@ jobs:
           assert m["contract_checks"], "contract checks did not run"
           assert m["physical_port"] == "${{ matrix.port }}", m["physical_port"]
           assert any("vrt49_fhm_hop_ctrl" in f for f in m["files"])
+          assert any("tick_pps_select.v" in f for f in m["files"])
+          assert any("system_tick_pps_cdc.xdc" in f for f in m["files"])
           assert any("tick_adrv9009zu11eg_adrv2crr_fmc.tcl" in f for f in m["files"])
           print(len(m["files"]), "staged files;", "patch queue:", m["patch_queue"])
           PY
