@@ -1,5 +1,13 @@
 # STATUS — 2026-11-05 — END TO END on tron over SFP+ (default port) with real VRT timestamps: Tick→FHM→hop controller→Context→SFP+→nemo 82599 captures tagged with hop frequency; QSFP lane 0 still selectable
 
+## Tick PPS fallback on tron (2026-11-06) — hardware-verified
+`tick_pps_select` (#9, ac07d56) drives Tick's `pps_in`: external PPS on PMOD0 D4 when it carries a
+qualified 1 Hz pulse, otherwise Corundum's internal PTP PPS. Bitstream `ws-pps-20261106T043603Z`:
+routed WNS +0.071 ns, WHS +0.009 ns, SFP RX-tap and hop netlist checks PASS. In the routed checkpoint
+both synchroniser false paths are applied and `pmod0_d4` is PULLDOWN. On tron with nothing on PMOD0 D4:
+`pps_present` = 1, arming epoch 10^12 gave `time_aligned` = 1 within 300 ms, and the counter ran at
+100 MHz. hopcap hw-test 42171590634 on this image: 4/4.
+
 ## Tick PPS fallback (2026-11-05, datax P3a) — RTL, BD, checks done; bitstream + hardware PENDING
 Owner request: 1PPS may be unconnected, so Tick needs a fallback to an internal clock.
 Tick's `pps_in` was a constant (`tick_pps_tieoff`). It is now driven by `tick_pps_select_0`
