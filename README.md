@@ -25,8 +25,9 @@ Settle time and capture length are single values for the whole plan.
 |---|---|
 | `third_party/tick`, `third_party/vrt49` | pinned submodules (`pins.json` is the contract) |
 | `hdl/vrt49_fhm_hop_ctrl/` | hop controller RTL + ADI IP packaging |
+| `hdl/tick_pps_select/` | Tick `pps_in` selector: qualified external 1PPS, Corundum PTP PPS fallback |
 | `hdl/hopctrl_regmap.json` | single source of truth for the controller register map |
-| `hdl/system_bd_fabric_hop.tcl` | block-design fragment wiring Tick -> controller -> framer |
+| `hdl/system_bd_fabric_hop.tcl` | block-design fragment wiring Tick -> controller -> framer, and the PPS selector |
 | `hdl/sim/cocotb/` | Verilator + cocotb testbenches |
 | `scripts/` | workspace assembly, bitstream and boot-artifact builds, evidence verifier |
 | `src/hopcap/` | host runner (`hopcap plan|run|decode|evidence|verify`) |

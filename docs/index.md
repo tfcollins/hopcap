@@ -62,6 +62,7 @@ reference/requirements-traceability
 
 explanation/architecture
 explanation/fhm-pipeline
+explanation/pps
 explanation/loss-accounting
 ```
 

@@ -26,3 +26,10 @@ event so a consumer can see from an epoch gap that a Context was never published
 
 Capture length is in Tick ticks; the framer finishes packets atomically, so received samples are
 checked within one packet (360 samples) of the expected count.
+
+Tick's `pps_in` comes from `tick_pps_select_0`. It uses a qualified external 1PPS on PMOD0_D4
+(`gpio_i[16]`) when one is present, and otherwise falls back to Corundum's PTP PPS
+(`ptp_pps_str`), the same net vrt49's time base uses. Its state appears on EMIO `gpio_i[20]`
+(`sel_ext`) and `gpio_i[21]` (`ext_alive`). The selection rule, the no-spurious-edge
+guarantee and what "aligned" means without an external PPS are covered in
+[Tick's 1PPS](pps.md).
