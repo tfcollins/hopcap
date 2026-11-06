@@ -6,14 +6,17 @@ Tick's `pps_in` was a constant (`tick_pps_tieoff`). It is now driven by `tick_pp
 (`hdl/tick_pps_select/`): a qualified external PPS on PMOD0_D4 (`gpio_i[16]`, vrt49's
 existing slice), otherwise Corundum's `ptp_pps_str` (the net vrt49's time base uses).
 External qualifies after 2 consecutive periods in 0.9..1.1 s with an edge in the last 1.25 s.
-`pps_out` is regenerated with a 0.9 s minimum edge spacing, so a switch or glitch never gives
-Tick a spurious edge (at most one is lost). The design follows the spec's both-low switch rule,
-with one addition: after `PERIOD_MAX` it waits only for the target input to be low, which
-covers a stuck-high external.
+`pps_out` is regenerated, with a 0.9 s minimum edge spacing and an in-window period gate on
+every external edge. A switch, a glitch or a late edge therefore never gives Tick a spurious
+edge; at most one good edge is lost per switch. Switches happen at the target input's first
+quiet sample. An external that stops costs 1-2 Tick seconds, whether it goes low or sticks
+high. PMOD0_D4 gets a hopcap-only `PULLTYPE PULLDOWN`.
 `sel_ext`/`ext_alive` go to EMIO `gpio_i[20]`/`[21]` (gpio lines 98/99, a PS loopback in every
 top, unused by DT); evidence is in `docs/explanation/pps.md`. CDC: `system_tick_pps_cdc.xdc`.
-- cocotb `TOP=tick_pps_select`: 10/10. Eight mutants killed (guard, switch rule, stuck-high,
-  one-period, reset, timeout, min and max bound). Verilator `-Wall` clean.
+- cocotb `TOP=tick_pps_select`: 12/12 (PR #9 review I1: a late edge and a glitch after a dropped
+  edge reached Tick; both are now cases, and both fail on the pre-fix RTL). Eight mutants
+  killed (period gate, spacing guard, switch rule, one-period, reset, timeout, min and max
+  bound). Verilator `-Wall` clean. Elaboration fails on a bad parameter order.
 - `check_hop_netlist` now requires `pps_in` = selector `pps_out` (not a constant),
   `int_pps_async` on Corundum `ptp_pps_str` and `ext_pps_async` on `vrt49_external_pps_slice`.
 - Assembler runs on the pinned ADI + Corundum trees (sfp 100 files, qsfp 101), with contract

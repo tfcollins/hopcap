@@ -72,10 +72,19 @@ class Trace:
     def switches(self) -> list[int]:
         return [i for i in range(1, len(self.sel)) if self.sel[i] != self.sel[i - 1]]
 
-    def check(self, *, ext_initially_high=False, int_initially_high=False) -> dict:
+    def ext_period(self, e: int, ext_r: list[int]) -> int | None:
+        """Period closed by external edge e (cycles from the previous external edge)."""
+        i = ext_r.index(e)
+        return e - ext_r[i - 1] if i else None
+
+    def ext_in_window(self, e: int, ext_r: list[int]) -> bool:
+        p = self.ext_period(e, ext_r)
+        return p is not None and PERIOD_MIN <= p <= PERIOD_MAX
+
+    def check(self) -> dict:
         """Assert the invariants; return counts for test-specific checks."""
-        ext_r = set(rises(self.ext))
-        int_r = set(rises(self.int))
+        ext_l = rises(self.ext)
+        ext_r, int_r = set(ext_l), set(rises(self.int))
         outs = self.out_edges
         for a, b in pairwise(outs):
             assert b - a >= PERIOD_MIN, f"output edges {a} and {b} only {b - a} cycles apart"
@@ -87,33 +96,32 @@ class Trace:
                 f"output edge at {o} has no {'ext' if src else 'int'} edge at {edge} "
                 f"(selected={src}; other input edge there: {edge in other})"
             )
-        # Selected-input edges that reached the detector inside the trace
+            if src:
+                assert self.ext_in_window(edge, ext_l), (
+                    f"external edge {edge} reached Tick with period "
+                    f"{self.ext_period(edge, ext_l)} outside [{PERIOD_MIN}, {PERIOD_MAX}]"
+                )
+        # Selected-input edges that reached the detector inside the trace and that the
+        # selector may deliver: every internal edge, external ones only with in-window periods.
         offered = 0
         for e in sorted(ext_r | int_r):
             d = e + LATENCY - 1  # cycle whose sel decided acceptance
             if d >= len(self.sel):
                 continue
-            if (e in ext_r and self.sel[d]) or (e in int_r and not self.sel[d]):
-                offered += 1
+            ext_ok = e in ext_r and self.sel[d] and self.ext_in_window(e, ext_l)
+            int_ok = e in int_r and not self.sel[d]
+            offered += ext_ok or int_ok
         # Switch rule: a switch recorded at s was decided in the cycle before it, where the
         # synchronised level is the input driven at s-LATENCY and the previous sample the one
-        # before.  Both inputs must be quiet unless the request has been pending PERIOD_MAX
-        # cycles, in which case the target input alone must be.
+        # before.  The target input must be quiet there.
         for s in self.switches():
             tgt = self.ext if self.sel[s] else self.int
             window = range(s - LATENCY - 1, s - LATENCY + 1)
-            want_since = max(
-                i for i in range(1, s + 1) if self.alive[i] != self.alive[i - 1] or i == 1
-            )
             assert not any(tgt[k] for k in window), f"switch at {s} with target input high"
-            if s - want_since < PERIOD_MAX:
-                assert not any(self.ext[k] or self.int[k] for k in window), (
-                    f"switch at {s} only {s - want_since} cycles after request, inputs not both low"
-                )
         dropped = offered - len(outs)
         assert dropped >= 0
         assert dropped <= len(self.switches()), (
-            f"{dropped} selected edges dropped across {len(self.switches())} switches"
+            f"{dropped} in-window selected edges dropped across {len(self.switches())} switches"
         )
         return {"outs": len(outs), "offered": offered, "dropped": dropped}
 
@@ -198,39 +206,106 @@ async def test_jittered_in_range_is_selected(dut):
     tr.check()
 
 
-@cocotb.test()
-async def test_external_stops_falls_back_to_internal(dut):
-    """External stops low: alive drops ALIVE_TIMEOUT after its last edge, Tick falls back."""
-    await start(dut)
-    n = 18 * NOMINAL
-    stop = 8 * NOMINAL
-    int_ = periodic(n, NOMINAL, INT_HIGH, phase=11)
-    ext = periodic(n, NOMINAL, EXT_HIGH, phase=90, stop=stop)
-    tr = await run(dut, ext, int_)
-    last = rises(ext)[-1]
+def assert_fallback(tr: Trace, last: int) -> int:
+    """External's last edge was at `last`: check the exact fallback instant and that Tick gets
+    no edge until the first internal edge after it, then every internal edge.  Returns the
+    number of Tick seconds lost."""
+    n = len(tr.sel)
     drop = next(i for i in range(last, n) if tr.alive[i - 1] and not tr.alive[i])
     # the edge is counted at last+LATENCY; ALIVE_TIMEOUT cycles on, the registered alive clears
     assert drop == last + LATENCY + 1 + ALIVE_TIMEOUT, (drop, last)
-    sw = tr.switches()
-    assert len(sw) == 2 and tr.sel[-1] == 0
-    tail = [o for o in tr.out_edges if o > sw[1]]
-    assert tail and all(o - LATENCY in set(rises(int_)) for o in tail)
-    tr.check()
+    # the switch happens in the first cycle whose synchronised internal samples are both low
+    sw = next(
+        s for s in range(drop + 1, n) if not tr.int[s - LATENCY] and not tr.int[s - LATENCY - 1]
+    )
+    assert tr.switches()[-1] == sw and tr.sel[-1] == 0, (tr.switches(), sw)
+    assert sw - drop <= INT_HIGH + LATENCY + 1
+    outs = tr.out_edges
+    assert [o for o in outs if last + LATENCY < o < sw] == []
+    expect = [r + LATENCY for r in rises(tr.int) if r + LATENCY - 1 >= sw]
+    assert [o for o in outs if o >= sw] == expect
+    gap = expect[0] - (last + LATENCY)
+    assert ALIVE_TIMEOUT < gap <= ALIVE_TIMEOUT + NOMINAL + 2 * LATENCY, gap
+    lost = round(gap / NOMINAL) - 1
+    assert lost in (1, 2), gap
+    return lost
+
+
+@cocotb.test()
+async def test_external_stops_falls_back_to_internal(dut):
+    """External stops low: alive drops ALIVE_TIMEOUT after its last edge, Tick falls back at
+    the first quiet internal sample; 1-2 Tick seconds are lost, none duplicated."""
+    await start(dut)
+    n = 18 * NOMINAL
+    stop = 8 * NOMINAL
+    for int_phase in (11, 120):
+        int_ = periodic(n, NOMINAL, INT_HIGH, phase=int_phase)
+        ext = periodic(n, NOMINAL, EXT_HIGH, phase=90, stop=stop)
+        tr = await run(dut, ext, int_)
+        assert len(tr.switches()) == 2
+        assert_fallback(tr, rises(ext)[-1])
+        tr.check()
 
 
 @cocotb.test()
 async def test_external_stuck_high_still_falls_back(dut):
-    """External dies HIGH (no both-low window ever again): the pending switch still happens."""
+    """External dies HIGH: the fallback is exactly as fast as for a pin that stops low."""
     await start(dut)
     n = 18 * NOMINAL
     stop = 8 * NOMINAL
-    int_ = periodic(n, NOMINAL, INT_HIGH, phase=11)
-    ext = periodic(n, NOMINAL, EXT_HIGH, phase=90, stop=stop)
-    last = rises(ext)[-1]
-    for k in range(last, n):
-        ext[k] = 1
+    for int_phase in (11, 120):
+        int_ = periodic(n, NOMINAL, INT_HIGH, phase=int_phase)
+        ext = periodic(n, NOMINAL, EXT_HIGH, phase=90, stop=stop)
+        last = rises(ext)[-1]
+        for k in range(last, n):
+            ext[k] = 1
+        tr = await run(dut, ext, int_)
+        assert len(tr.switches()) == 2
+        assert_fallback(tr, last)
+        tr.check()
+
+
+@cocotb.test()
+async def test_late_external_edge_never_reaches_tick(dut):
+    """Selected external, one period of PERIOD_MAX < p < ALIVE_TIMEOUT: still 'alive' when the
+    late edge arrives, but the edge is refused in that cycle (review I1, repro mode=1)."""
+    await start(dut)
+    n = 16 * NOMINAL
+    int_ = periodic(n, NOMINAL, INT_HIGH, phase=30)
+    late = PERIOD_MAX + 15
+    assert late < ALIVE_TIMEOUT
+    edges = [10 + k * NOMINAL for k in range(6)]
+    edges += [edges[-1] + late + k * NOMINAL for k in range(10)]  # runs to the end
+    ext = from_edges(n, edges, EXT_HIGH)
     tr = await run(dut, ext, int_)
-    assert tr.sel[-1] == 0 and len(tr.switches()) == 2
+    le = edges[6]
+    assert tr.sel[le + LATENCY - 1] == 1 and tr.alive[le + LATENCY - 1] == 1, "premise"
+    assert le + LATENCY not in tr.out_edges
+    assert tr.sel[-1] == 1  # requalifies
+    tr.check()
+
+
+@cocotb.test()
+async def test_glitch_after_a_dropped_edge_never_reaches_tick(dut):
+    """The first external edge after a switch is dropped by the spacing guard; a glitch more
+    than PERIOD_MIN after the previous output edge (but only part of a second after that
+    dropped edge) must not reach Tick either (review I1, repro mode=0)."""
+    await start(dut)
+    n = 14 * NOMINAL
+    # Internal fires 30 cycles after each external edge, so the last internal edge before the
+    # switch leaves the next external edge inside the spacing window.
+    int_ = periodic(n, NOMINAL, INT_HIGH, phase=90)
+    ext = periodic(n, NOMINAL, EXT_HIGH, phase=60)
+    dropped_edge = 60 + 3 * NOMINAL  # first external edge after the switch to external
+    glitch = dropped_edge + 130
+    ext[glitch] = ext[glitch + 1] = 1
+    tr = await run(dut, ext, int_)
+    d = dropped_edge + LATENCY - 1
+    assert tr.sel[d] == 1, "premise: external selected when its edge arrives"
+    assert dropped_edge + LATENCY not in tr.out_edges, "premise: spacing guard dropped it"
+    prev_out = max(o for o in tr.out_edges if o < dropped_edge)
+    assert glitch - prev_out >= PERIOD_MIN, "premise: the spacing guard alone would pass it"
+    assert glitch + LATENCY not in tr.out_edges
     tr.check()
 
 
@@ -325,7 +400,7 @@ async def test_switch_phase_sweep_no_spurious_or_duplicate_edges(dut):
     ext = periodic(n, NOMINAL, NOMINAL // 2, phase=NOMINAL // 2)
     tr = await run(dut, ext, int_)
     assert not any(not e and not i for e, i in zip(ext[NOMINAL:], int_[NOMINAL:], strict=True))
-    assert tr.sel[-1] == 1, "pending switch must complete even without a both-low window"
+    assert tr.sel[-1] == 1, "switch must complete even without a both-low window"
     tr.check()
 
 

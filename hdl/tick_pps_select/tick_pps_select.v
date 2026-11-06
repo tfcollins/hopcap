@@ -18,28 +18,33 @@
 // One out-of-range period (glitch, chatter, a floating pin picking up noise) or a timeout
 // clears the count, so external must again show GOOD_PERIODS good periods before it is chosen.
 //
-// sel_ext is the source actually applied (1 = external).  It follows ext_alive, but only
-// changes in a quiet cycle: both synchronised inputs low in this and the previous sample, so
-// no edge is in progress on either.  If no such cycle occurs within PERIOD_MAX cycles of the
-// request (an external pin stuck high after failing, or a wide-duty external in anti-phase
-// with Corundum's 54 % level) it changes in the first cycle in which the *target* input alone
-// is low in both samples.  Reset selects internal.
+// sel_ext is the source actually applied (1 = external).  It follows ext_alive, changing in
+// the first cycle in which the *target* input is quiet (low in this and the previous
+// synchronised sample, so none of its edges is in progress).  The input being left does not
+// matter: pps_out is regenerated (below), so its level cannot leak through.  A stuck-high
+// external therefore cannot delay the fallback, and a wide-duty external in anti-phase with
+// Corundum's ~54 % level cannot block the switch.  Reset selects internal.
 //
 // pps_out is regenerated, not muxed: an accepted rising edge of the selected input starts a
-// PULSE_CYCLES-wide pulse, with the same fixed latency for either source.  Guarantee:
-//
+// PULSE_CYCLES-wide pulse, with the same fixed latency for either source.  An edge of the
+// selected input is accepted only if
+//   * it is at least PERIOD_MIN cycles after the previous pps_out edge (spacing guard), and
+//   * for the external input, its own period from the previous external edge is inside
+//     [PERIOD_MIN, PERIOD_MAX] (the same test that qualifies the input), so a late edge or a
+//     glitch is refused in the very cycle it arrives, before ext_alive can drop.
+// Guarantee:
 //   * every rising edge of pps_out is caused by a rising edge of the then-selected input, so
 //     a switch never manufactures an edge (both detectors always run, so an input that is
 //     already high when it becomes selected shows no rising edge until it next goes low and
 //     high again);
-//   * consecutive pps_out rising edges are at least PERIOD_MIN cycles apart: a selected edge
-//     closer than that to the previous output edge is dropped.  This absorbs the phase step
-//     at a switch and any glitch on a selected external, so Tick never sees a spurious edge;
-//   * at most one input edge is dropped per switch (the next one is a full second later);
+//   * consecutive pps_out rising edges are at least PERIOD_MIN cycles apart, and every
+//     external edge delivered closes an in-window period, so Tick never sees a spurious edge;
+//   * at most one in-window edge is dropped per switch (the next one is a full second later);
 //   * after reset no edge is emitted until an input has been seen low and then rises.
 //
-// Requires PULSE_CYCLES < PERIOD_MIN <= PERIOD_MAX < ALIVE_TIMEOUT for the intended
-// behaviour (defaults: 0.1 s, 0.9 s, 1.1 s, 1.25 s at 100 MHz).
+// Parameters must satisfy 0 < PULSE_CYCLES < PERIOD_MIN <= PERIOD_MAX < ALIVE_TIMEOUT and
+// GOOD_PERIODS >= 1 (defaults: 0.1 s, 0.9 s, 1.1 s, 1.25 s at 100 MHz, 2); elaboration fails
+// otherwise.
 `timescale 1ns/1ps
 module tick_pps_select #(
     parameter integer ALIVE_TIMEOUT = 125000000,
@@ -99,18 +104,23 @@ module tick_pps_select #(
     wire ext_period_ok = ext_have_prev && (ext_period >= P_MIN) && (ext_period <= P_MAX);
 
     // Selection.
-    reg [CW-1:0] pend;          // cycles a requested switch has waited (saturating)
     wire want_ext = ext_alive;
     wire tgt_quiet = want_ext ? ext_quiet : int_quiet;
-    wire pend_expired = (pend >= P_MAX);
-    wire do_switch = (sel_ext != want_ext) &&
-                     ((ext_quiet && int_quiet) || (pend_expired && tgt_quiet));
+    wire do_switch = (sel_ext != want_ext) && tgt_quiet;
 
     // Output regeneration and spacing guard.
     reg [CW-1:0] out_since;     // cycles since the last output edge, saturating at PERIOD_MIN-1
     reg [CW-1:0] pulse_left;
     wire sel_rise = sel_ext ? ext_rise : int_rise;
-    wire accept = sel_rise && (out_since >= SPACING_SAT);
+    wire accept = sel_rise && (out_since >= SPACING_SAT) && (!sel_ext || ext_period_ok);
+
+    // Elaboration-time parameter check (Verilog-2005: an unresolvable module fails the build).
+    generate
+        if (!(PULSE_CYCLES > 0 && PULSE_CYCLES < PERIOD_MIN && PERIOD_MIN <= PERIOD_MAX &&
+              PERIOD_MAX < ALIVE_TIMEOUT && GOOD_PERIODS >= 1)) begin : g_bad_parameters
+            tick_pps_select_requires_PULSE_lt_PMIN_le_PMAX_lt_TIMEOUT u_bad_parameters ();
+        end
+    endgenerate
 
     always @(posedge clk) begin
         if (!resetn) begin
@@ -125,7 +135,6 @@ module tick_pps_select #(
             ext_good <= {GW{1'b0}};
             ext_alive <= 1'b0;
             sel_ext <= 1'b0;
-            pend <= {CW{1'b0}};
             out_since <= SPACING_SAT;
             pulse_left <= {CW{1'b0}};
             pps_out <= 1'b0;
@@ -154,14 +163,7 @@ module tick_pps_select #(
             end
             ext_alive <= (ext_good == GOOD_N);
 
-            if (do_switch) begin
-                sel_ext <= want_ext;
-                pend <= {CW{1'b0}};
-            end else if (sel_ext != want_ext) begin
-                if (!pend_expired) pend <= pend + ONE;
-            end else begin
-                pend <= {CW{1'b0}};
-            end
+            if (do_switch) sel_ext <= want_ext;
 
             if (accept) begin
                 out_since <= {CW{1'b0}};
