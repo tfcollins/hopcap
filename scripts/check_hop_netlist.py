@@ -8,8 +8,8 @@ as vrt49's check-sfp-rx-netlist.py does) and the staged top-level, and fails clo
   * axi_timed_command_scheduler is instantiated;
   * the top-level drives adrv9009_gpio_00_a from tick_fhm_gpio[0];
   * Tick's pps_in is driven by tick_pps_select's pps_out (not Tick's constant tie-off), the
-    selector's int_pps_async is Corundum's ptp_pps_str and its ext_pps_async is vrt49's
-    external PPS slice (gpio_i[16]).
+    selector's int_pps_async is Corundum's ptp_pps_str on the same net as vrt49_time_base_0's
+    pps_in, and its ext_pps_async is vrt49's external PPS (gpio_i[16]) slice.
 
 The PPS checks read port connections (``.pin(net)``) of the instances in the BD's top
 ``module system``, so they follow nets rather than matching names alone.
@@ -108,16 +108,26 @@ def check_pps(netlist: str) -> list[str]:
         for p, net in c.items()
         if net == int_net and _CORUNDUM_PPS_PORT.fullmatch(p)
     ]
+    # vrt49's time base is a packaged IP, so always an instance: Tick must share its PPS nets.
+    tb = insts.get("vrt49_time_base_0", ("", {}))[1]
     if not int_net:
         errors.append(f"{sel_name}.int_pps_async is unconnected")
     elif not corundum:
         errors.append(
             f"{sel_name}.int_pps_async ({int_net}) does not trace to Corundum's ptp_pps_str"
         )
-    slice_out = insts.get("vrt49_external_pps_slice", ("", {}))[1].get("Dout")
-    if not ext_net or ext_net != slice_out:
+    elif int_net != tb.get("pps_in"):
         errors.append(
-            f"{sel_name}.ext_pps_async ({ext_net}) is not vrt49_external_pps_slice.Dout ({slice_out})"
+            f"{sel_name}.int_pps_async ({int_net}) is not vrt49_time_base_0.pps_in "
+            f"({tb.get('pps_in')}): Tick and VRT would not share a second"
+        )
+    # The external PPS is vrt49's gpio_i[16] slice, seen either at the slice instance or at the
+    # time base's pps_alt_in (in case Vivado ever inlines xlslice the way it inlines xlconcat).
+    slice_out = insts.get("vrt49_external_pps_slice", ("", {}))[1].get("Dout")
+    if not ext_net or ext_net not in {slice_out, tb.get("pps_alt_in")} - {None}:
+        errors.append(
+            f"{sel_name}.ext_pps_async ({ext_net}) is neither vrt49_external_pps_slice.Dout "
+            f"({slice_out}) nor vrt49_time_base_0.pps_alt_in ({tb.get('pps_alt_in')})"
         )
     return errors
 

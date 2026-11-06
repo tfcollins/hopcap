@@ -185,3 +185,21 @@ def test_only_the_top_module_is_parsed():
         ".int_pps_async(corundum_hierarchy_ptp_pps_str)", ".int_pps_async(x_int)"
     )
     assert any("does not trace" in e for e in chn.check_pps(net))
+
+
+def test_int_input_not_shared_with_the_vrt_time_base_fails():
+    net = GOOD_NET.replace(".pps_in(corundum_hierarchy_ptp_pps_str));", ".pps_in(some_other_pps));")
+    errs = chn.check_pps(net)
+    assert any("is not vrt49_time_base_0.pps_in" in e for e in errs), errs
+
+
+def test_ext_input_accepted_via_time_base_when_the_slice_is_inlined():
+    """If Vivado inlines xlslice (no instance), the time base's pps_alt_in still identifies it."""
+    net = GOOD_NET.replace(
+        "  system_vrt49_external_pps_slice_0 vrt49_external_pps_slice\n"
+        "       (.Din(gpio_i_1),\n"
+        "        .Dout(vrt49_external_pps_slice_Dout));\n",
+        "  assign vrt49_external_pps_slice_Dout = gpio_i_1[16];\n",
+    )
+    assert "vrt49_external_pps_slice\n" not in net
+    assert chn.check_pps(net) == []
