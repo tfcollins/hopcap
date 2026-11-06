@@ -3,6 +3,7 @@
 # Cocotb + Verilator runner for hopcap RTL.
 #   make TOP=vrt49_fhm_hop_ctrl     # controller unit suite
 #   make TOP=fhm_hop_chain          # controller + vrt49 framer (needs libvrt49.so, see CLAUDE.md)
+#   make TOP=tick_pps_select        # Tick pps_in selector (small cycle counts, below)
 #   make lint
 # Mirrors third_party/vrt49/hdl/sim/cocotb/Makefile (venv re-exec, per-TOP build dirs).
 
@@ -39,6 +40,7 @@ lint:
 	verilator --lint-only -Wall $(LINT_WARN) \
 	    -I$(VRT49_HDL)/axi_vrt49_framer \
 	    $(HDL)/vrt49_fhm_hop_ctrl/vrt49_fhm_hop_ctrl.v
+	verilator --lint-only -Wall $(LINT_WARN) $(HDL)/tick_pps_select/tick_pps_select.v
 	verilator --lint-only -Wall $(LINT_WARN) -Wno-MULTITOP \
 	    -I$(VRT49_HDL)/axi_vrt49_framer \
 	    $(HDL)/sim/cocotb/fhm_hop_chain.v \
@@ -67,8 +69,23 @@ VERILOG_SOURCES := \
 COMPILE_ARGS += -Wno-WIDTHEXPAND -Wno-WIDTHTRUNC
 endif
 
+# A "second" is 200 cycles here; the test reads the same values from the environment.
+ifeq ($(TOP),tick_pps_select)
+TOPLEVEL := tick_pps_select
+MODULE   := test_tick_pps_select
+VERILOG_SOURCES := $(HDL)/tick_pps_select/tick_pps_select.v
+export PPS_SEL_ALIVE_TIMEOUT := 250
+export PPS_SEL_PERIOD_MIN    := 180
+export PPS_SEL_PERIOD_MAX    := 220
+export PPS_SEL_GOOD_PERIODS  := 2
+export PPS_SEL_PULSE_CYCLES  := 20
+COMPILE_ARGS += -GALIVE_TIMEOUT=$(PPS_SEL_ALIVE_TIMEOUT) -GPERIOD_MIN=$(PPS_SEL_PERIOD_MIN) \
+    -GPERIOD_MAX=$(PPS_SEL_PERIOD_MAX) -GGOOD_PERIODS=$(PPS_SEL_GOOD_PERIODS) \
+    -GPULSE_CYCLES=$(PPS_SEL_PULSE_CYCLES)
+endif
+
 ifndef TOPLEVEL
-$(error Set TOP=vrt49_fhm_hop_ctrl | fhm_hop_chain)
+$(error Set TOP=vrt49_fhm_hop_ctrl | fhm_hop_chain | tick_pps_select)
 endif
 
 export PYTHONPATH := $(CURDIR):$(REPO)/third_party/vrt49/hdl/sim/cocotb:$(PYTHONPATH)

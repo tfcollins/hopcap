@@ -1,5 +1,30 @@
 # STATUS — 2026-11-05 — END TO END on tron over SFP+ (default port) with real VRT timestamps: Tick→FHM→hop controller→Context→SFP+→nemo 82599 captures tagged with hop frequency; QSFP lane 0 still selectable
 
+## Tick PPS fallback (2026-11-05, datax P3a) — RTL, BD, checks done; bitstream + hardware PENDING
+Owner request: 1PPS may be unconnected, so Tick needs a fallback to an internal clock.
+Tick's `pps_in` was a constant (`tick_pps_tieoff`). It is now driven by `tick_pps_select_0`
+(`hdl/tick_pps_select/`): a qualified external PPS on PMOD0_D4 (`gpio_i[16]`, vrt49's
+existing slice), otherwise Corundum's `ptp_pps_str` (the net vrt49's time base uses).
+External qualifies after 2 consecutive periods in 0.9..1.1 s with an edge in the last 1.25 s.
+`pps_out` is regenerated, with a 0.9 s minimum edge spacing and an in-window period gate on
+every external edge. A switch, a glitch or a late edge therefore never gives Tick a spurious
+edge; at most one good edge is lost per switch. Switches happen at the target input's first
+quiet sample. An external that stops costs 1-2 Tick seconds, whether it goes low or sticks
+high. PMOD0_D4 gets a hopcap-only `PULLTYPE PULLDOWN`.
+`sel_ext`/`ext_alive` go to EMIO `gpio_i[20]`/`[21]` (gpio lines 98/99, a PS loopback in every
+top, unused by DT); evidence is in `docs/explanation/pps.md`. CDC: `system_tick_pps_cdc.xdc`.
+- cocotb `TOP=tick_pps_select`: 12/12 (PR #9 review I1: a late edge and a glitch after a dropped
+  edge reached Tick; both are now cases, and both fail on the pre-fix RTL). Eight mutants
+  killed (period gate, spacing guard, switch rule, one-period, reset, timeout, min and max
+  bound). Verilator `-Wall` clean. Elaboration fails on a bad parameter order.
+- `check_hop_netlist` now requires `pps_in` = selector `pps_out` (not a constant),
+  `int_pps_async` on Corundum `ptp_pps_str` and `ext_pps_async` on `vrt49_external_pps_slice`.
+- Assembler runs on the pinned ADI + Corundum trees (sfp 100 files, qsfp 101), with contract
+  checks passing.
+- Pending (controller): bitstream build (expect a new `PPS CDC` false path; `check_pps_cdc.tcl`
+  covers only vrt49's time base), `check_hop_netlist`, then on tron: `PPS_STATUS.pps_seen`=1 with
+  nothing on PMOD0_D4, and `gpioget` lines 98/99 = 0/0.
+
 ## Physical port parameter (2026-11-05) — SFP+ default, 4/4 on tron
 datax_sdk_sdr#25 gave nemo's XL710 QSFP cage to mini2's 4x10G breakout and cabled tron's SFP+ cage to
 nemo's 82599 `enp2s0`. The cage is now a build parameter (`--port sfp|qsfp`, `VRT49_PHYSICAL_PORT`,

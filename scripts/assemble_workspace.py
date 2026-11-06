@@ -6,12 +6,14 @@ Codifies the "Create pinned ADI HDL and Corundum workspace" and "Stage VRT49 IP"
 vrt49/.github/workflows/hdl-corundum.yml, then adds what the composite needs:
 
   library/vrt49_fhm_hop_ctrl/                       hopcap IP
+  library/tick_pps_select/                          hopcap IP: Tick pps_in selector (ext PPS / Corundum PPS)
   library/axi_timed_command_scheduler/              Tick RTL + IP tcl (module reference)
   projects/adrv9009zu11eg/adrv2crr_fmc/tick_*.tcl   Tick fragment, where Tick's tooling expects it
   <port top>.v                                      Tick's patch_system_top() (TAL_GPIO_0) on the top the
                                                     --port build uses: the vrt49 project's system_top_sfp.v
                                                     (sfp, default) or ADI's adrv2crr_fmc/system_top_corundum.v (qsfp)
-  projects/adrv9009zu11eg_vrt49_corundum/           vrt49 project + system_bd_fabric_hop.tcl, with
+  projects/adrv9009zu11eg_vrt49_corundum/           vrt49 project + system_bd_fabric_hop.tcl +
+                                                    system_tick_pps_cdc.xdc, with
                                                     anchored edits to system_project.tcl / system_bd.tcl / Makefile
   overlays/patches/*.patch                          pre-upstream deltas (must be empty for a release build)
   MANIFEST.json                                     SHA-256 of every staged file + pins
@@ -63,8 +65,11 @@ PROJECT_REL = Path("projects/adrv9009zu11eg_vrt49_corundum")
 ADI_PROJECT_REL = Path("projects/adrv9009zu11eg/adrv2crr_fmc")
 TICK_LIB_REL = Path("library/axi_timed_command_scheduler")
 HOP_LIB_REL = Path("library/vrt49_fhm_hop_ctrl")
+PPS_LIB_REL = Path("library/tick_pps_select")
+PPS_CDC_XDC = "system_tick_pps_cdc.xdc"
 
 TICK_RTL_ENTRY = '"../../library/axi_timed_command_scheduler/axi_timed_command_scheduler.v"'
+PPS_CDC_ENTRY = f'"{PPS_CDC_XDC}"'
 TICK_FRAGMENT_SOURCE = (
     "source $ad_hdl_dir/projects/adrv9009zu11eg/adrv2crr_fmc/tick_adrv9009zu11eg_adrv2crr_fmc.tcl"
 )
@@ -176,9 +181,10 @@ def patch_system_project(text: str) -> str:
     marker = '  "system_vrt49_cdc.xdc" \\'
     if marker not in text:
         raise AssembleError("system_project.tcl: anchor 'system_vrt49_cdc.xdc' not found")
-    if TICK_RTL_ENTRY in text:
-        return text
-    return text.replace(marker, marker + f"\n  {TICK_RTL_ENTRY} \\", 1)
+    added = "".join(
+        f"\n  {entry} \\" for entry in (TICK_RTL_ENTRY, PPS_CDC_ENTRY) if entry not in text
+    )
+    return text.replace(marker, marker + added, 1) if added else text
 
 
 def patch_system_bd(text: str) -> str:
@@ -204,17 +210,25 @@ def patch_system_bd(text: str) -> str:
 
 
 def patch_makefile(text: str) -> str:
-    if "LIB_DEPS += vrt49_fhm_hop_ctrl" in text:
+    if "LIB_DEPS += vrt49_fhm_hop_ctrl" in text and "LIB_DEPS += tick_pps_select" in text:
         return text
+    if "LIB_DEPS += vrt49_fhm_hop_ctrl\n" in text:  # patched before the PPS selector existed
+        return text.replace(
+            "LIB_DEPS += vrt49_fhm_hop_ctrl\n",
+            f"LIB_DEPS += vrt49_fhm_hop_ctrl\nM_DEPS += {PPS_CDC_XDC}\nLIB_DEPS += tick_pps_select\n",
+            1,
+        )
     anchor = "include ../scripts/project-xilinx.mk"
     if anchor not in text:
         raise AssembleError("Makefile: anchor 'include ../scripts/project-xilinx.mk' not found")
     block = (
         "# hopcap additions\n"
         "M_DEPS += system_bd_fabric_hop.tcl\n"
+        f"M_DEPS += {PPS_CDC_XDC}\n"
         "M_DEPS += ../adrv9009zu11eg/adrv2crr_fmc/tick_adrv9009zu11eg_adrv2crr_fmc.tcl\n"
         "M_DEPS += ../../library/axi_timed_command_scheduler/axi_timed_command_scheduler.v\n"
-        "LIB_DEPS += vrt49_fhm_hop_ctrl\n\n"
+        "LIB_DEPS += vrt49_fhm_hop_ctrl\n"
+        "LIB_DEPS += tick_pps_select\n\n"
     )
     return text.replace(anchor, block + anchor, 1)
 
@@ -244,6 +258,7 @@ def staged_files(adi: Path, port: str = "sfp") -> list[Path]:
         PROJECT_REL,
         TICK_LIB_REL,
         HOP_LIB_REL,
+        PPS_LIB_REL,
         ADI_PROJECT_REL / "tick_adrv9009zu11eg_adrv2crr_fmc.tcl",
         PORT_TOP[port],
     ):
@@ -322,13 +337,15 @@ def assemble(
     )
     stage_dir(VRT49 / "hdl" / PROJECT_REL, adi / PROJECT_REL, dry_run)
 
-    # hopcap IP + fragment
+    # hopcap IP + fragment + the PPS selector's CDC constraints
     stage_dir(ROOT / "hdl" / "vrt49_fhm_hop_ctrl", adi / HOP_LIB_REL, dry_run)
+    stage_dir(ROOT / "hdl" / "tick_pps_select", adi / PPS_LIB_REL, dry_run)
     stage_file(
         ROOT / "hdl" / "system_bd_fabric_hop.tcl",
         adi / PROJECT_REL / "system_bd_fabric_hop.tcl",
         dry_run,
     )
+    stage_file(ROOT / "hdl" / PPS_CDC_XDC, adi / PROJECT_REL / PPS_CDC_XDC, dry_run)
 
     # Tick: RTL + IP tcl + fragment, then its own system_top patch on the port's top
     tick_lib = TICK / "hdl" / TICK_LIB_REL

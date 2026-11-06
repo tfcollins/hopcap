@@ -126,6 +126,14 @@ def test_assemble_stages_everything_and_patches_the_project(fake_tree, port):
     assert (adi / PROJECT_REL / "system_bd_fabric_hop.tcl").read_text() == (
         ROOT / "hdl/system_bd_fabric_hop.tcl"
     ).read_text()
+    # Tick pps_in selector IP + its CDC constraints
+    for name in ("tick_pps_select.v", "tick_pps_select_ip.tcl", "Makefile"):
+        assert (adi / "library/tick_pps_select" / name).read_bytes() == (
+            ROOT / "hdl/tick_pps_select" / name
+        ).read_bytes()
+    assert (adi / PROJECT_REL / "system_tick_pps_cdc.xdc").read_text() == (
+        ROOT / "hdl/system_tick_pps_cdc.xdc"
+    ).read_text()
     # Tick RTL + fragment where Tick's own tooling expects them
     assert (adi / "library/axi_timed_command_scheduler/axi_timed_command_scheduler.v").exists()
     assert (adi / ADI_PROJECT_REL / "tick_adrv9009zu11eg_adrv2crr_fmc.tcl").exists()
@@ -139,6 +147,8 @@ def test_assemble_stages_everything_and_patches_the_project(fake_tree, port):
     # project edits
     sp = (adi / PROJECT_REL / "system_project.tcl").read_text()
     assert '"../../library/axi_timed_command_scheduler/axi_timed_command_scheduler.v"' in sp
+    # the PPS CDC xdc is in the project file list, right after vrt49's own CDC constraints
+    assert sp.index('"system_vrt49_cdc.xdc"') < sp.index('"system_tick_pps_cdc.xdc"')
     bd = (adi / PROJECT_REL / "system_bd.tcl").read_text()
     assert (
         bd.index("source system_bd_vrt49.tcl")
@@ -151,9 +161,14 @@ def test_assemble_stages_everything_and_patches_the_project(fake_tree, port):
         and "LIB_DEPS += axi_timed_command_scheduler" not in mk
     )
     assert "M_DEPS += system_bd_fabric_hop.tcl" in mk
+    assert "LIB_DEPS += tick_pps_select" in mk and "M_DEPS += system_tick_pps_cdc.xdc" in mk
     # manifest
     assert manifest["pins"]["adi_hdl"]["revision"]
     assert manifest["files"]["library/vrt49_fhm_hop_ctrl/vrt49_fhm_hop_ctrl.v"]
+    assert manifest["files"]["library/tick_pps_select/tick_pps_select.v"] == aw.sha256(
+        ROOT / "hdl/tick_pps_select/tick_pps_select.v"
+    )
+    assert manifest["files"][str(PROJECT_REL / "system_tick_pps_cdc.xdc")]
     assert manifest["files"][str(PORT_TOPS[port])]
     assert manifest["physical_port"] == port
     assert json.loads((fake_tree["root"] / "MANIFEST.json").read_text())["physical_port"] == port
@@ -210,6 +225,35 @@ def test_assemble_is_idempotent(fake_tree):
     bd = (fake_tree["adi"] / PROJECT_REL / "system_bd.tcl").read_text()
     assert bd.count("source system_bd_fabric_hop.tcl") == 1
     assert bd.count("tick_adrv9009zu11eg_adrv2crr_fmc.tcl") == 1
+    sp = (fake_tree["adi"] / PROJECT_REL / "system_project.tcl").read_text()
+    assert sp.count('"system_tick_pps_cdc.xdc"') == 1
+    assert sp.count("axi_timed_command_scheduler.v") == 1
+    mk = (fake_tree["adi"] / PROJECT_REL / "Makefile").read_text()
+    assert mk.count("LIB_DEPS += tick_pps_select") == 1
+
+
+def test_project_edits_are_idempotent_and_upgrade_older_patches():
+    """Re-running the edits adds nothing; a tree patched before the PPS selector existed gains
+    only the selector's entries, never a second copy of the whole block."""
+    sp = '  "system_vrt49_cdc.xdc" \\\n  "other.tcl" ]]\n'
+    once = aw.patch_system_project(sp)
+    assert aw.patch_system_project(once) == once
+    old_sp = sp.replace(
+        '"system_vrt49_cdc.xdc" \\', '"system_vrt49_cdc.xdc" \\\n  ' + aw.TICK_RTL_ENTRY + " \\"
+    )
+    upgraded = aw.patch_system_project(old_sp)
+    assert upgraded.count(aw.TICK_RTL_ENTRY) == 1 and upgraded.count(aw.PPS_CDC_ENTRY) == 1
+
+    mk = "PROJECT_NAME := x\ninclude ../scripts/project-xilinx.mk\n"
+    once = aw.patch_makefile(mk)
+    assert aw.patch_makefile(once) == once
+    old_mk = once.replace("M_DEPS += system_tick_pps_cdc.xdc\n", "").replace(
+        "LIB_DEPS += tick_pps_select\n", ""
+    )
+    upgraded = aw.patch_makefile(old_mk)
+    assert upgraded.count("LIB_DEPS += tick_pps_select") == 1
+    assert upgraded.count("M_DEPS += system_tick_pps_cdc.xdc") == 1
+    assert upgraded.count("# hopcap additions") == 1
 
 
 def test_pin_check_fails_closed_on_wrong_adi_sha(fake_tree):
