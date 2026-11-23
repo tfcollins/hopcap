@@ -35,8 +35,8 @@
   },
   "labgrid_plugins": {
     "repository": "https://github.com/tfcollins/labgrid-plugins",
-    "revision": "70d389a5b91ef48242791340c98ac84e5bb69b07",
-    "why": "same pin as vrt49 hw-test.yml so hopcap and vrt49 share one runner venv contract"
+    "revision": "53f62352467bf93584fc226dcde2c3773d995351",
+    "why": "same pin as vrt49 hw-test.yml (vrt49#87) so hopcap and vrt49 share one runner venv contract; 53f6235 = labgrid-plugins main with the XilinxDeviceJTAG serial fix (#189) plus the artifact-free hw-request"
   },
   "vivado": "2025.1"
 }
