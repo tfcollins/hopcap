@@ -158,6 +158,8 @@ chk() { # name command...
     chk deframer_absent sh -c "! fdtget -l '$dtb' /fpga-axi@0/iio_vrt49_deframer@84ab0000"
     chk tx_dma_stock sh -c "fdtget -t s '$dtb' /fpga-axi@0/axi-adrv9009-tx-hpc@84a04000 dma-names | grep -qx tx && fdtget -t x '$dtb' /fpga-axi@0/axi-adrv9009-tx-hpc@84a04000 dmas"
     chk tick_gate_map sh -c "fdtget -t s '$dtb' /fpga-axi@0/timed-command-scheduler@86000000 adi,stream-gate-map | grep -qx '$TDMA_GATE_MAP'"
+    # Tick on core_clk_a (TICK_TIMEBASE_CLK=core_clk_a): clocks = <&hmc7044 6>, 122.88 MHz.
+    chk tick_clock_hmc7044_ch6 sh -c "p=\$(fdtget -t x '$dtb' \$(fdtget -t s '$dtb' /__symbols__ hmc7044) phandle) && fdtget -t x '$dtb' /fpga-axi@0/timed-command-scheduler@86000000 clocks | grep -qx \"\$p 6\""
   else
     chk deframer_node sh -c "fdtget -t s '$dtb' /fpga-axi@0/iio_vrt49_deframer@84ab0000 compatible | grep -qx adi,axi-vrt49-dac-tx-1.00.a"
     chk tick_gate_map_absent sh -c "! fdtget -t s '$dtb' /fpga-axi@0/timed-command-scheduler@86000000 adi,stream-gate-map"
@@ -165,7 +167,9 @@ chk() { # name command...
   chk corundum_node sh -c "fdtget -t s '$dtb' /axi/ethernet@a0000000 compatible | grep -qx corundum,mqnic"
   chk rx_filter_node sh -c "fdtget -t s '$dtb' /axi/rx-filter@84aa0000 compatible | grep -qx adi,vrt49-rx-filter-1.0"
   chk tick_node sh -c "fdtget -t s '$dtb' /fpga-axi@0/timed-command-scheduler@86000000 compatible | grep -qx adi,axi-timed-command-scheduler-1.0"
-  chk tick_hz sh -c "fdtget -t i '$dtb' /fpga-axi@0/timed-command-scheduler@86000000 adi,time-tick-hz | grep -qx 100000000"
+  tick_hz=100000000
+  [ "$profile" = timed-dma ] && tick_hz=122880000
+  chk tick_hz sh -c "fdtget -t i '$dtb' /fpga-axi@0/timed-command-scheduler@86000000 adi,time-tick-hz | grep -qx $tick_hz"
   chk hop_node sh -c "fdtget -t s '$dtb' /fpga-axi@0/fhm-hop-controller@84ac0000 compatible | grep -qx nous,vrt49-fhm-hop-controller-1.0"
 } > "$out/dtb-checks.txt"
 cat "$out/dtb-checks.txt"

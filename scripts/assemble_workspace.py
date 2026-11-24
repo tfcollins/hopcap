@@ -22,7 +22,8 @@ Profiles (``--profile``, recorded in MANIFEST.json with the build environment it
 
   default    the hopcap composite above
   timed-dma  libdatax P3b image candidate A (spike gate G1), SFP only. Adds:
-             * build_env VRT_DAC_TX_ENABLE=0 (vrt49 keeps the stock TX DMA -> axi_tx_fifo nets);
+             * build_env VRT_DAC_TX_ENABLE=0 (vrt49 keeps the stock TX DMA -> axi_tx_fifo nets)
+               and TICK_TIMEBASE_CLK=core_clk_a (Tick on the converter clock, sdk#40);
                build_bitstream.sh exports MANIFEST build_env before make
              * Tick's tick_dma_gate, tick_fifo_tag_adapter and tick_stream_timestamp_tag RTL
                under library/ (module references, added by the fragment)
@@ -108,9 +109,18 @@ TDMA_TICK_RTL = (
     Path("library/tick_stream_timestamp_tag/tick_stream_timestamp_tag.v"),
     Path("library/tick_fifo_tag_adapter/tick_fifo_tag_adapter.v"),
 )
+# hopcap RTL the fragment instantiates as a module reference: Tick's FHM GPIO into the hop
+# controller's sys_cpu_clk domain (Tick itself runs on core_clk_a in this profile).
+TDMA_HOP_RTL = (Path("library/tick_gpio_sync/tick_gpio_sync.v"),)
 PROFILES = {
     "default": {"build_env": {}, "ports": PORTS},
-    "timed-dma": {"build_env": {"VRT_DAC_TX_ENABLE": "0"}, "ports": ("sfp",)},
+    # TICK_TIMEBASE_CLK=core_clk_a: Tick counts the converter clock (HMC7044 ch6, 122.88 MHz,
+    # one tick per two RX samples), libdatax P3b option 1 (datax_sdk_sdr#40).  core_clk_b
+    # (245.76 MHz) does not close: the scheduler's 64-bit due-time path is ~7 ns.
+    "timed-dma": {
+        "build_env": {"VRT_DAC_TX_ENABLE": "0", "TICK_TIMEBASE_CLK": "core_clk_a"},
+        "ports": ("sfp",),
+    },
 }
 
 # Chip B FHM (P3b decision 7, spike G4): applied after Tick's patch_system_top, which already
@@ -322,7 +332,11 @@ def patch_makefile_tdma(text: str) -> str:
         raise AssembleError("Makefile: anchor 'include ../scripts/project-xilinx.mk' not found")
     block = marker + "".join(
         f"M_DEPS += {dep}\n"
-        for dep in (TDMA_FRAGMENT, TDMA_CDC_XDC, *(f"../../{p}" for p in TDMA_TICK_RTL))
+        for dep in (
+            TDMA_FRAGMENT,
+            TDMA_CDC_XDC,
+            *(f"../../{p}" for p in (*TDMA_TICK_RTL, *TDMA_HOP_RTL)),
+        )
     )
     return text.replace(anchor, block + "\n" + anchor, 1)
 
@@ -407,7 +421,7 @@ def apply_patch_queue(adi: Path, dry: bool) -> list[str]:
 def staged_files(adi: Path, port: str = "sfp", profile: str = "default") -> list[Path]:
     out: list[Path] = []
     tdma = (
-        (*TDMA_TICK_RTL, PROJECT_REL / TDMA_FRAGMENT, PROJECT_REL / TDMA_CDC_XDC)
+        (*TDMA_TICK_RTL, *TDMA_HOP_RTL, PROJECT_REL / TDMA_FRAGMENT, PROJECT_REL / TDMA_CDC_XDC)
         if profile == "timed-dma"
         else ()
     )
@@ -511,6 +525,8 @@ def assemble(
             stage_file(ROOT / "hdl" / name, adi / PROJECT_REL / name, dry_run)
         for rel in TDMA_TICK_RTL:
             stage_file(TICK / "hdl" / rel, adi / rel, dry_run)
+        for rel in TDMA_HOP_RTL:
+            stage_file(ROOT / "hdl" / rel.relative_to("library"), adi / rel, dry_run)
 
     # Tick: RTL + IP tcl + fragment, then its own system_top patch on the port's top
     tick_lib = TICK / "hdl" / TICK_LIB_REL

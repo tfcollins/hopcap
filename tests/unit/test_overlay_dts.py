@@ -103,11 +103,21 @@ def _strip_comments(text: str) -> str:
 
 
 def test_timed_dma_overlay_matches_the_default_overlay_plus_the_gate_map():
-    """Same Tick and hop-controller nodes as hopcap-sfp; the only addition is the map."""
+    """Same Tick and hop-controller nodes as hopcap-sfp, except the map and Tick's clock.
+
+    Tick runs on HMC7044 channel 6 (core_clk_a, 122.88 MHz) on this image (P3b option 1).
+    """
     base = _strip_comments(DTS.read_text()).split("/dts-v1/;", 1)[1]
     tdma = _strip_comments(TDMA_DTS.read_text()).split("/dts-v1/;", 1)[1]
     prop = re.search(r"\n\s*adi,stream-gate-map = [^;]+;", tdma).group(0)
-    assert tdma.replace(prop, "") == base
+    assert "clocks = <&hmc7044 6>;" in tdma and "adi,time-tick-hz = <122880000>;" in tdma
+    tdma = tdma.replace("clocks = <&hmc7044 6>;", "clocks = <&zynqmp_clk 71>;")
+    tdma = tdma.replace("<122880000>", "<100000000>")
+
+    def lines(text: str) -> list[str]:
+        return [ln for ln in text.splitlines() if ln.strip()]
+
+    assert lines(tdma.replace(prop, "")) == lines(base)
     assert "adi,stream-gate-map" not in DTS.read_text()  # hopcap-sfp advertises no gate
 
 

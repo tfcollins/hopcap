@@ -246,7 +246,7 @@ def tdma_instances() -> dict[str, tuple[str, dict[str, str]]]:
                 "pass_dev": "tick_rx_dma_gate_pass_dev",
                 "rx_valid_in": f"{t}_adc_valid_0",
                 "rx_valid_out": "tick_rx_dma_gate_rx_valid_out",
-                "tick_clk": "sys_cpu_clk",
+                "tick_clk": "core_clk_a",
                 "tx_data_in": "tick_tdma_zero_256_dout",
                 "tx_rd_en_in": "tick_tdma_zero_1_dout",
             },
@@ -299,7 +299,7 @@ def tdma_instances() -> dict[str, tuple[str, dict[str, str]]]:
                 "m_fifo_wr_overflow": "axi_adrv9009_som_rx_dma_fifo_wr_overflow",
                 "pass_dev": "tick_rx_dma_gate_pass_dev",
                 "mode_dev": "tick_rx_dma_gate_mode_dev",
-                "tag_clk": "sys_cpu_clk",
+                "tag_clk": "core_clk_a",
                 **{
                     f"tag_{f}": f"axi_timed_command_scheduler_0_capture_tag_{f}"
                     for f in ("ticks", "seq", "target", "command", "gate", "count", "late", "valid")
@@ -323,7 +323,7 @@ def tdma_instances() -> dict[str, tuple[str, dict[str, str]]]:
         "axi_timed_command_scheduler_0": (
             "system_axi_timed_command_scheduler_0_0",
             {
-                "s_axi_aclk": "sys_cpu_clk",
+                "s_axi_aclk": "core_clk_a",
                 "pps_in": "tick_pps_select_0_pps_out",
                 "stream_gate_en": "axi_timed_command_scheduler_0_stream_gate_en",
                 "stream_tag_en": "axi_timed_command_scheduler_0_stream_tag_en",
@@ -350,7 +350,7 @@ def tdma_instances() -> dict[str, tuple[str, dict[str, str]]]:
                 "gate_level": "tick_gate_tx_level_Dout",
                 "gate_mode": "tick_gate_tx_mode_Dout",
                 "rx_valid_in": "tick_tdma_zero_1_dout",
-                "tick_clk": "sys_cpu_clk",
+                "tick_clk": "core_clk_a",
                 "tx_data_in": "tick_tx_gate_data_concat_dout",
                 "tx_data_out": "tick_tx_dma_gate_tx_data_out",
                 "tx_rd_en_in": "tx_adrv9009_som_tpl_core_dac_valid_0",
@@ -401,6 +401,22 @@ def tdma_instances() -> dict[str, tuple[str, dict[str, str]]]:
             },
         ),
     }
+    inst["tick_fhm_gpio_slice"] = (
+        "system_tick_fhm_gpio_slice_0",
+        {"Din": "axi_timed_command_scheduler_0_gpio_out", "Dout": "tick_fhm_gpio_slice_Dout"},
+    )
+    inst["tick_hop_gpio_sync"] = (
+        "system_tick_hop_gpio_sync_0",
+        {
+            "clk": "sys_cpu_clk",
+            "gpio_async": "tick_fhm_gpio_slice_Dout",
+            "gpio_sync": "tick_hop_gpio_sync_gpio_sync",
+        },
+    )
+    inst["vrt49_fhm_hop_ctrl_0"] = (
+        "system_vrt49_fhm_hop_ctrl_0_0",
+        {"clk": "sys_cpu_clk", "scheduler_gpio": "tick_hop_gpio_sync_gpio_sync"},
+    )
     for name in (
         "tick_gate_rx_level",
         "tick_gate_tx_level",
@@ -463,6 +479,11 @@ def test_timed_dma_wiring_passes():
         # TX lane or read enable bypassing the gate
         ("tx_adrv9009_som_tpl_core", "dac_data_3", "util_som_tx_upack_fifo_rd_data_3", "TX lane"),
         ("util_som_tx_upack", "fifo_rd_en", "tx_adrv9009_som_tpl_core_dac_valid_0", "TX gate"),
+        # Tick left on the PS clock (TICK_TIMEBASE_CLK not applied)
+        ("axi_timed_command_scheduler_0", "s_axi_aclk", "sys_cpu_clk", "core_clk_a"),
+        # hop controller fed straight from Tick's slice across the clock domains
+        ("vrt49_fhm_hop_ctrl_0", "scheduler_gpio", "tick_fhm_gpio_slice_Dout", "sync"),
+        ("tick_hop_gpio_sync", "clk", "core_clk_a", "hop GPIO sync clock"),
         # vrt49's TX bridge left in front of axi_tx_fifo
         ("axi_tx_fifo", "dma_data", "vrt49_dac_tx_0_m_axis_tdata", "stock TX DMA"),
     ],

@@ -4,6 +4,7 @@
 #   make TOP=vrt49_fhm_hop_ctrl     # controller unit suite
 #   make TOP=fhm_hop_chain          # controller + vrt49 framer (needs libvrt49.so, see CLAUDE.md)
 #   make TOP=tick_pps_select        # Tick pps_in selector (small cycle counts, below)
+#   make TOP=tick_gpio_sync         # timed-dma: Tick FHM GPIO into the controller's clock
 #   make lint
 # Mirrors third_party/vrt49/hdl/sim/cocotb/Makefile (venv re-exec, per-TOP build dirs).
 
@@ -41,6 +42,7 @@ lint:
 	    -I$(VRT49_HDL)/axi_vrt49_framer \
 	    $(HDL)/vrt49_fhm_hop_ctrl/vrt49_fhm_hop_ctrl.v
 	verilator --lint-only -Wall $(LINT_WARN) $(HDL)/tick_pps_select/tick_pps_select.v
+	verilator --lint-only -Wall $(LINT_WARN) $(HDL)/tick_gpio_sync/tick_gpio_sync.v
 	verilator --lint-only -Wall $(LINT_WARN) -Wno-MULTITOP \
 	    -I$(VRT49_HDL)/axi_vrt49_framer \
 	    $(HDL)/sim/cocotb/fhm_hop_chain.v \
@@ -51,6 +53,12 @@ lint:
 ifneq ($(MAKECMDGOALS),lint)
 
 COMPILE_ARGS += -I$(VRT49_HDL)/axi_vrt49_framer
+
+ifeq ($(TOP),tick_gpio_sync)
+TOPLEVEL := tick_gpio_sync
+MODULE   := test_tick_gpio_sync
+VERILOG_SOURCES := $(HDL)/tick_gpio_sync/tick_gpio_sync.v
+endif
 
 ifeq ($(TOP),vrt49_fhm_hop_ctrl)
 TOPLEVEL := vrt49_fhm_hop_ctrl

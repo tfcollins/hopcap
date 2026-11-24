@@ -35,9 +35,14 @@
             timed-command-scheduler@86000000 {
                 compatible = "adi,axi-timed-command-scheduler-1.0";
                 reg = <0x0 0x86000000 0x1000>;
-                clocks = <&zynqmp_clk 71>;
+                /*
+                 * Tick runs on core_clk_a, HMC7044 channel 6 CORE_CLK_TX_OBS_AB (122.88 MHz,
+                 * TICK_TIMEBASE_CLK=core_clk_a; libdatax P3b option 1, datax_sdk_sdr#40).
+                 * The driver enables this clock before touching the AXI-Lite port.
+                 */
+                clocks = <&hmc7044 6>;
                 clock-names = "s_axi_aclk";
-                adi,time-tick-hz = <100000000>;
+                adi,time-tick-hz = <122880000>;
                 adi,stream-gate-map = "rx-dma", "tx-dma", "rx-mode", "tx-mode",
                                       "fhm-b", "tx-start-fullmask-only";
             };

@@ -78,7 +78,8 @@ FORBIDDEN_TOP_TDMA = ("gpio_t[92:33]", "adrv9009_gpio_00_b}));", "adrv9009_gpio_
 TDMA_WRAPPERS = {
     "axi_timed_command_scheduler_0": (
         "axi_timed_command_scheduler",
-        {"STREAM_GATE_COUNT": "8", "HAS_STREAM_TIMESTAMP": "1", "TIME_TICK_HZ": "100000000"},
+        # TICK_TIMEBASE_CLK=core_clk_a: one tick per two RX samples (P3b option 1, sdk#40)
+        {"STREAM_GATE_COUNT": "8", "HAS_STREAM_TIMESTAMP": "1", "TIME_TICK_HZ": "122880000"},
     ),
     "tick_rx_dma_gate": (
         "tick_dma_gate",
@@ -305,6 +306,17 @@ def check_timed_dma(netlist: str) -> list[str]:
         same((f"tick_tx_gate_data_slice_{i}", "Din"), (txg, "tx_data_out"), "TX lane slice")
         same((ttpl, f"dac_data_{i}"), (f"tick_tx_gate_data_slice_{i}", "Dout"), "TX lane out")
         differ((ttpl, f"dac_data_{i}"), (upack, f"fifo_rd_data_{i}"), "TX lane bypasses gate")
+
+    # Tick on the converter clock (P3b option 1): the scheduler shares upack's core_clk_a, and
+    # differs from the hop controller's sys_cpu_clk, which gets the FHM GPIO through
+    # tick_hop_gpio_sync instead of straight from Tick's slice.
+    hop, gsync = "vrt49_fhm_hop_ctrl_0", "tick_hop_gpio_sync"
+    same((sched, "s_axi_aclk"), (upack, "clk"), "Tick timebase on core_clk_a")
+    differ((sched, "s_axi_aclk"), (hop, "clk"), "Tick timebase on the hop controller's clock")
+    same((gsync, "gpio_async"), ("tick_fhm_gpio_slice", "Dout"), "hop GPIO sync input")
+    same((hop, "scheduler_gpio"), (gsync, "gpio_sync"), "hop controller GPIO through the sync")
+    same((gsync, "clk"), (hop, "clk"), "hop GPIO sync clock")
+    differ((hop, "scheduler_gpio"), ("tick_fhm_gpio_slice", "Dout"), "hop GPIO bypasses the sync")
 
     # the stock TX DMA -> axi_tx_fifo path (VRT_DAC_TX_ENABLE=0)
     if "vrt49_dac_tx_0" in insts:

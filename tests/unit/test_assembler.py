@@ -411,10 +411,14 @@ def test_tdma_assembly_stages_the_profile_and_routes_chip_b(fake_tree):
         profile="timed-dma",
     )
     assert manifest["profile"] == "timed-dma"
-    assert manifest["build_env"] == {"VRT_DAC_TX_ENABLE": "0"}
+    assert manifest["build_env"] == {"VRT_DAC_TX_ENABLE": "0", "TICK_TIMEBASE_CLK": "core_clk_a"}
     for rel in aw.TDMA_TICK_RTL:
         assert (adi / rel).read_bytes() == (TICK / "hdl" / rel).read_bytes()
         assert manifest["files"][str(rel)] == aw.sha256(TICK / "hdl" / rel)
+    for rel in aw.TDMA_HOP_RTL:
+        src = ROOT / "hdl" / rel.relative_to("library")
+        assert (adi / rel).read_bytes() == src.read_bytes()
+        assert manifest["files"][str(rel)] == aw.sha256(src)
     for name in (aw.TDMA_FRAGMENT, aw.TDMA_CDC_XDC):
         assert (adi / PROJECT_REL / name).read_bytes() == (ROOT / "hdl" / name).read_bytes()
         assert manifest["files"][str(PROJECT_REL / name)]
@@ -424,6 +428,7 @@ def test_tdma_assembly_stages_the_profile_and_routes_chip_b(fake_tree):
     assert sp.count(aw.TDMA_CDC_ENTRY) == 1 and aw.TDMA_CDC_IMPL_ONLY in sp
     mk = (adi / PROJECT_REL / "Makefile").read_text()
     assert f"M_DEPS += {aw.TDMA_FRAGMENT}" in mk and f"M_DEPS += {aw.TDMA_CDC_XDC}" in mk
+    assert "M_DEPS += ../../library/tick_gpio_sync/tick_gpio_sync.v" in mk
 
     # chip B on the real vrt49 SFP top, after Tick's chip-A edit
     top = (adi / PORT_TOPS["sfp"]).read_text()

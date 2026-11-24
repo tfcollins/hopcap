@@ -24,7 +24,15 @@
 # 3 TX timed mode, 4..7 spare.  pass = !mode | level, so at reset every gate passes and the
 # image streams exactly like the stock design.
 #
-# Clock crossings (sys_cpu_clk -> core_clk_b / core_clk_a) are constrained by
+# Clocking (libdatax P3b option 1, datax_sdk_sdr#40): MANIFEST build_env sets
+# TICK_TIMEBASE_CLK=core_clk_a, so Tick's fragment already put the scheduler on core_clk_a
+# (HMC7044 ch6, 122.88 MHz, one tick per two RX samples) behind an AXI clock converter.
+# core_clk_b (245.76 MHz, one tick per sample) was the first choice but the unchanged
+# scheduler does not close there (OOC WNS -3.08 ns: ~7 ns 64-bit due-time path).  The TX
+# gate is then same-clock; the RX gate and the tagger cross core_clk_a -> core_clk_b
+# (same HMC7044 PLL2, locked 1:2).  tick_pps_select and vrt49_fhm_hop_ctrl stay on
+# sys_cpu_clk: pps_out enters Tick's own pps synchronizer, and the FHM GPIO slice reaches
+# the controller through tick_gpio_sync.  Crossings are constrained by
 # system_timed_dma_cdc.xdc.
 
 if {![info exists ad_project_params(VRT_DAC_TX_ENABLE)] || $ad_project_params(VRT_DAC_TX_ENABLE) != 0} {
@@ -44,7 +52,8 @@ foreach cell {axi_timed_command_scheduler_0 util_som_rx_cpack util_som_tx_upack 
 # Module-reference RTL (staged by the assembler; Tick's fragment adds the scheduler the same way).
 foreach rel {tick_dma_gate/tick_dma_gate.v \
              tick_stream_timestamp_tag/tick_stream_timestamp_tag.v \
-             tick_fifo_tag_adapter/tick_fifo_tag_adapter.v} {
+             tick_fifo_tag_adapter/tick_fifo_tag_adapter.v \
+             tick_gpio_sync/tick_gpio_sync.v} {
   set rtl "$ad_hdl_dir/library/$rel"
   if {![file exists $rtl]} {
     error "hopcap timed-dma: $rtl not staged"
@@ -60,6 +69,12 @@ update_compile_order -fileset sources_1
 set_property -dict [list \
   CONFIG.STREAM_GATE_COUNT {8} \
   CONFIG.HAS_STREAM_TIMESTAMP {1}] [get_bd_cells axi_timed_command_scheduler_0]
+
+# Tick must be on core_clk_a at the converter rate (TICK_TIMEBASE_CLK=core_clk_a).
+set tdma_tick_hz [get_property CONFIG.TIME_TICK_HZ [get_bd_cells axi_timed_command_scheduler_0]]
+if {$tdma_tick_hz != 122880000} {
+  error "hopcap timed-dma: Tick TIME_TICK_HZ is $tdma_tick_hz, expected 122880000 (TICK_TIMEBASE_CLK=core_clk_a)"
+}
 
 proc hopcap_tdma_net_of {pin} {
   set p [get_bd_pins -quiet $pin]
@@ -121,7 +136,7 @@ set_property -dict [list \
   CONFIG.TX_PAUSE_READS {0} \
   CONFIG.TX_START_MUTE {3}] [get_bd_cells tick_rx_dma_gate]
 hopcap_tdma_active_high tick_rx_dma_gate/dev_rst
-ad_connect sys_cpu_clk tick_rx_dma_gate/tick_clk
+ad_connect core_clk_a tick_rx_dma_gate/tick_clk
 ad_connect tick_gate_rx_level/Dout tick_rx_dma_gate/gate_level
 ad_connect tick_gate_rx_mode/Dout tick_rx_dma_gate/gate_mode
 ad_connect core_clk_b tick_rx_dma_gate/dev_clk
@@ -184,7 +199,7 @@ ad_connect axi_adrv9009_som_rx_dma/fifo_wr_overflow tick_rx_tag_adapter/m_fifo_w
 ad_connect tick_rx_dma_gate/pass_dev tick_rx_tag_adapter/pass_dev
 ad_connect tick_rx_dma_gate/mode_dev tick_rx_tag_adapter/mode_dev
 
-ad_connect sys_cpu_clk tick_rx_tag_adapter/tag_clk
+ad_connect core_clk_a tick_rx_tag_adapter/tag_clk
 foreach f {ticks seq target command gate count late valid} {
   ad_connect axi_timed_command_scheduler_0/capture_tag_$f tick_rx_tag_adapter/tag_$f
 }
@@ -192,8 +207,8 @@ ad_connect axi_timed_command_scheduler_0/stream_tag_oneshot tick_rx_tag_adapter/
 ad_ip_instance xlslice tick_tag_en_slice [list DIN_WIDTH 8 DIN_FROM 0 DIN_TO 0 DOUT_WIDTH 1]
 ad_connect axi_timed_command_scheduler_0/stream_tag_en tick_tag_en_slice/Din
 ad_connect tick_tag_en_slice/Dout tick_rx_tag_adapter/tag_enable
-# Must equal the scheduler's TIME_TICK_HZ (sys_cpu_clk, 100 MHz).
-ad_ip_instance xlconstant tick_tag_tick_hz [list CONST_WIDTH 32 CONST_VAL 100000000]
+# Must equal the scheduler's TIME_TICK_HZ (core_clk_a, 122.88 MHz).
+ad_ip_instance xlconstant tick_tag_tick_hz [list CONST_WIDTH 32 CONST_VAL $tdma_tick_hz]
 ad_connect tick_tag_tick_hz/dout tick_rx_tag_adapter/tag_tick_hz
 # Tagger diagnostics -> REG_STREAM_TAG_STATUS[31:24].
 ad_connect tick_rx_tag_adapter/dbg_status axi_timed_command_scheduler_0/stream_tag_probe
@@ -209,7 +224,7 @@ set_property -dict [list \
   CONFIG.TX_PAUSE_READS {0} \
   CONFIG.TX_START_MUTE {3}] [get_bd_cells tick_tx_dma_gate]
 hopcap_tdma_active_high tick_tx_dma_gate/dev_rst
-ad_connect sys_cpu_clk tick_tx_dma_gate/tick_clk
+ad_connect core_clk_a tick_tx_dma_gate/tick_clk
 ad_connect tick_gate_tx_level/Dout tick_tx_dma_gate/gate_level
 ad_connect tick_gate_tx_mode/Dout tick_tx_dma_gate/gate_mode
 ad_connect core_clk_a tick_tx_dma_gate/dev_clk
@@ -249,7 +264,24 @@ foreach {src dst} {m_axis_data dma_data m_axis_valid dma_valid m_axis_ready dma_
   hopcap_tdma_same_net axi_adrv9009_som_tx_dma/$src axi_tx_fifo/$dst "stock TX DMA -> axi_tx_fifo"
 }
 
+# ---------------------------------------------------------------------------------------
+# Tick now runs on core_clk_a: the scheduler, both gates' tick side and the tagger share it.
+hopcap_tdma_same_net axi_timed_command_scheduler_0/s_axi_aclk tick_tx_dma_gate/dev_clk "Tick on core_clk_a"
+hopcap_tdma_same_net axi_timed_command_scheduler_0/s_axi_aclk tick_rx_dma_gate/tick_clk "RX gate tick_clk"
+hopcap_tdma_same_net axi_timed_command_scheduler_0/s_axi_aclk tick_tx_dma_gate/tick_clk "TX gate tick_clk"
+hopcap_tdma_same_net axi_timed_command_scheduler_0/s_axi_aclk tick_rx_tag_adapter/tag_clk "tagger tag_clk"
+
+# The hop controller stays on sys_cpu_clk; its scheduler_gpio crosses through tick_gpio_sync
+# (slot bits two flops, event three, so the slot is settled when the event rises).
+hopcap_tdma_detach vrt49_fhm_hop_ctrl_0/scheduler_gpio
+create_bd_cell -type module -reference tick_gpio_sync tick_hop_gpio_sync
+ad_connect sys_cpu_clk tick_hop_gpio_sync/clk
+ad_connect tick_fhm_gpio_slice/Dout tick_hop_gpio_sync/gpio_async
+ad_connect tick_hop_gpio_sync/gpio_sync vrt49_fhm_hop_ctrl_0/scheduler_gpio
+hopcap_tdma_same_net vrt49_fhm_hop_ctrl_0/clk tick_hop_gpio_sync/clk "hop controller and its gpio sync"
+
 validate_bd_design
 puts "hopcap timed-dma: tick_rx_dma_gate (OPEN_DELAY 12, pack_reset) on util_som_rx_cpack fifo_wr_en/reset pins; tick_rx_tag_adapter (${tdma_pk_w} bit) between cpack and axi_adrv9009_som_rx_dma"
 puts "hopcap timed-dma: tick_tx_dma_gate (${tdma_tx_ch}x${tdma_tx_w} bit, mute, TX_START_MUTE 3) between util_som_tx_upack and tx_adrv9009_som_tpl_core; stock TX DMA -> axi_tx_fifo"
+puts "hopcap timed-dma: Tick on core_clk_a at $tdma_tick_hz Hz; hop controller GPIO through tick_gpio_sync"
 puts "hopcap timed-dma: gate bits stream_gate_en\[0\] RX level, \[1\] TX level, \[2\] RX mode, \[3\] TX mode; tagger gate 0, HAS_STREAM_TIMESTAMP 1"
