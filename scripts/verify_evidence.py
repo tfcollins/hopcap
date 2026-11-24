@@ -132,15 +132,42 @@ def verify_bitstream(d: Path, *, release: bool = False) -> list[str]:
     return errors
 
 
+# DTB checks build_boot_artifacts.sh must have recorded, per profile (besides the port refclk).
+BOOT_DTB_CHECKS = {
+    "default": ("tick_node", "hop_node", "framer_node"),
+    # no vrt49 deframer (VRT_DAC_TX_ENABLE=0), stock TX DMA, the image's stream gate map
+    "timed-dma": (
+        "tick_node",
+        "hop_node",
+        "framer_node",
+        "deframer_absent",
+        "tx_dma_stock",
+        "tick_gate_map",
+    ),
+}
+# A boot set boots from SD (BOOT.BIN) or over JTAG (system_top.bit + psu_init.tcl from the XSA).
+JTAG_INPUTS = ("system_top.bit", "psu_init.tcl")
+
+
 def verify_boot(d: Path) -> list[str]:
     errors: list[str] = []
+    boot = ("BOOT.BIN",) if (d / "BOOT.BIN").exists() or not (d / JTAG_INPUTS[0]).exists() else ()
+    jtag = JTAG_INPUTS if (d / JTAG_INPUTS[0]).exists() or (d / JTAG_INPUTS[1]).exists() else ()
     _check_sums(
-        d, errors, ("BOOT.BIN", "Image", "system.dtb", "hopcap.dtbo", "vrt49-framer-control.dtbo")
+        d,
+        errors,
+        (*boot, *jtag, "Image", "system.dtb", "hopcap.dtbo", "vrt49-framer-control.dtbo"),
     )
     prov_path = d / "boot-provenance.json"
     if not prov_path.exists():
         return [*errors, "boot-provenance.json missing"]
     prov = json.loads(prov_path.read_text())
+    profile = prov.get("profile", "default")
+    if profile not in PROFILES:
+        return [*errors, f"profile {profile!r} is not one of {PROFILES}"]
+    xsa = d / "system_top.xsa"
+    if jtag and xsa.exists() and sha256(xsa) != prov.get("xsa_sha256"):
+        errors.append("system_top.xsa sha256 != boot-provenance xsa_sha256")
     port = prov.get("physical_port", LEGACY_PORT)
     if port not in PORT_CLOCK:
         return [*errors, f"physical_port {port!r} is not sfp or qsfp"]
@@ -154,7 +181,9 @@ def verify_boot(d: Path) -> list[str]:
     for check, ok in (prov.get("dtb_checks") or {}).items():
         if not ok:
             errors.append(f"dtb check {check} failed")
-    for required in (f"{output}_output_clk", "tick_node", "hop_node", "framer_node"):
+    if profile == "timed-dma" and port != "sfp":
+        errors.append("profile timed-dma is SFP only")
+    for required in (f"{output}_output_clk", *BOOT_DTB_CHECKS[profile]):
         if required not in (prov.get("dtb_checks") or {}):
             errors.append(f"dtb check {required} not recorded")
     return errors

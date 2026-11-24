@@ -1,0 +1,54 @@
+// SPDX-License-Identifier: MIT
+/*
+ * hopcap overlay for the timed-dma profile (libdatax P3b, image candidate A; SFP only): the
+ * Tick scheduler, with the stream gate map this image is built with, and the
+ * vrt49_fhm_hop_ctrl block. Applied with fdtoverlay on top of
+ * zynqmp-adrv9009zu11eg-vrt49-control-timed-dma-overlay.dts (framer node, no deframer node).
+ *
+ * Same nodes, addresses and cell layout as zynqmp-adrv9009zu11eg-hopcap-overlay.dts, plus
+ * adi,stream-gate-map (Tick driver attribute stream_gate_map; libdatax derives RX_ARM,
+ * TX_ARM, STREAM_GATE and chip-B FHM_HOP from it):
+ *   gate bit 0  rx-dma    tick_gate_rx_level -> tick_rx_dma_gate/gate_level (cpack fifo_wr_en)
+ *   gate bit 1  tx-dma    tick_gate_tx_level -> tick_tx_dma_gate/gate_level (upack fifo_rd_en)
+ *   gate bit 2  rx-mode   tick_gate_rx_mode  -> tick_rx_dma_gate/gate_mode
+ *   gate bit 3  tx-mode   tick_gate_tx_mode  -> tick_tx_dma_gate/gate_mode
+ *     (hdl/system_bd_timed_dma.tcl; gate bits 4..7 are not wired and not listed)
+ *   fhm-b       tick_fhm_gpio[1] -> adrv9009_gpio_00_b (chip B TAL_GPIO_0; assembler
+ *               CHIP_B_EDITS). The adrv9009 chip B node already selects fhm GPIO pin 0, so it
+ *               needs no change here, as for chip A.
+ *   tx-start-fullmask-only
+ *               the image's TX start does not yet clear util_upack2's leftover half-word
+ *               after a reload (P3b spike G2/G3 ruling 2), so a timed TX start is exact only
+ *               with every TX channel enabled.
+ */
+/dts-v1/;
+/plugin/;
+
+/ {
+    fragment@0 {
+        target-path = "/fpga-axi@0";
+
+        __overlay__ {
+            #address-cells = <2>;
+            #size-cells = <1>;
+
+            timed-command-scheduler@86000000 {
+                compatible = "adi,axi-timed-command-scheduler-1.0";
+                reg = <0x0 0x86000000 0x1000>;
+                clocks = <&zynqmp_clk 71>;
+                clock-names = "s_axi_aclk";
+                adi,time-tick-hz = <100000000>;
+                adi,stream-gate-map = "rx-dma", "tx-dma", "rx-mode", "tx-mode",
+                                      "fhm-b", "tx-start-fullmask-only";
+            };
+
+            fhm-hop-controller@84ac0000 {
+                /* No kernel driver: the host programs it over /dev/mem (hopcap_target.py). */
+                compatible = "nous,vrt49-fhm-hop-controller-1.0";
+                reg = <0x0 0x84ac0000 0x1000>;
+                adi,slot-bits = <3>;
+                adi,event-gpio = "tick gpio_out[0]";
+            };
+        };
+    };
+};

@@ -46,6 +46,7 @@ def test_adapted_files_declare_their_upstream_license():
     licences = {
         "hdl/vrt49_fhm_hop_ctrl/vrt49_fhm_hop_ctrl.v": "BSD-2-Clause",
         "src/hopcap/native/udp_spool.c": "LGPL-2.1-or-later",
+        "kernel/dts/zynqmp-adrv9009zu11eg-vrt49-control-timed-dma-overlay.dts": "GPL-2.0",
     }
     for local, lic in licences.items():
         head = (ROOT / local).read_text().splitlines()[0]

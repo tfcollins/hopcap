@@ -3,11 +3,25 @@
 # Build the hopcap boot set for tron: Image + system.dtb (+ overlays) and BOOT.BIN.
 #
 #   scripts/build_boot_artifacts.sh --xsa evidence/<bitstream>/system_top.xsa --out evidence/boot-<stamp>
-#         [--port sfp|qsfp] [--work build/boot] [--skip-boot-bin] [--jobs N]
+#         [--port sfp|qsfp] [--profile default|timed-dma] [--work build/boot] [--skip-boot-bin] [--jobs N]
 #
 # --port picks the cage the bitstream drives (build_bitstream.sh --port must match): sfp (default,
 # the SFP+ cage on AD9545 OUT1_A/Q1A) or qsfp (QSFP lane 0 on OUT1_B/Q1B). The DTB programs that
 # output, as vrt49's kernel-control job does for the same PHYSICAL_PORT.
+#
+# --profile must match the bitstream's workspace (assemble_workspace.py --profile):
+#   default    vrt49 control overlay (framer + deframer) + hopcap overlay; the deframer owns the
+#              TX DMA (patch_adrv9009_tx_dma_owner.py)
+#   timed-dma  libdatax P3b image, SFP only. vrt49 is built with VRT_DAC_TX_ENABLE=0, so there is
+#              no vrt49_dac_tx at 0x84AB0000: the adapted control overlay without the deframer
+#              node, the stock TX DMA left on axi-adrv9009-tx-hpc (no DMA-owner patch), and the
+#              timed-dma hopcap overlay whose Tick node carries adi,stream-gate-map.
+#   The output overlay names (vrt49-framer-control.dtbo, hopcap.dtbo) are the same for both;
+#   boot-provenance.json records the profile and the source DTS of each.
+#
+# With --xsa, system_top.bit and psu_init.tcl (the JTAG boot inputs, scripts/extract_jtag_inputs.py)
+# and a copy of the XSA are written next to the kernel and DTB, so the set boots over JTAG without
+# a BOOT.BIN (--skip-boot-bin) as well as from SD.
 #
 # Codifies the pinned vrt49 kernel-control job and BOOT.BIN step (hdl-corundum.yml at the
 # submodule pin) plus the hopcap additions:
@@ -26,6 +40,7 @@ out=""
 work="$here/build/boot"
 skip_boot_bin=0
 port=sfp
+profile=default
 jobs=$(nproc)
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -33,9 +48,10 @@ while [ $# -gt 0 ]; do
     --out) out=$2; shift 2 ;;
     --work) work=$2; shift 2 ;;
     --port) port=$2; shift 2 ;;
+    --profile) profile=$2; shift 2 ;;
     --skip-boot-bin) skip_boot_bin=1; shift ;;
     --jobs) jobs=$2; shift 2 ;;
-    -h|--help) sed -n 2,16p "$0"; exit 0 ;;
+    -h|--help) sed -n 2,32p "$0"; exit 0 ;;
     *) echo "unknown arg $1" >&2; exit 2 ;;
   esac
 done
@@ -45,6 +61,18 @@ case "$port" in
   qsfp) clock_output=q1b; gt_output=8; clock_source=AD9545_OUT1_B_Q1B ;;
   *) echo "--port must be sfp or qsfp" >&2; exit 2 ;;
 esac
+case "$profile" in
+  default)
+    control_dts="$vrt49/kernel/iio-vrt49-buffer/zynqmp-adrv9009zu11eg-vrt49-control-overlay.dts"
+    hopcap_dts="$here/kernel/dts/zynqmp-adrv9009zu11eg-hopcap-overlay.dts" ;;
+  timed-dma)
+    [ "$port" = sfp ] || { echo "--profile timed-dma supports --port sfp only" >&2; exit 2; }
+    control_dts="$here/kernel/dts/zynqmp-adrv9009zu11eg-vrt49-control-timed-dma-overlay.dts"
+    hopcap_dts="$here/kernel/dts/zynqmp-adrv9009zu11eg-hopcap-timed-dma-overlay.dts" ;;
+  *) echo "--profile must be default or timed-dma" >&2; exit 2 ;;
+esac
+# libdatax tick_ops.c datax_tick_parse_gate_map reads this exact list (fdtget prints it space-separated)
+TDMA_GATE_MAP="rx-dma tx-dma rx-mode tx-mode fhm-b tx-start-fullmask-only"
 for tool in aarch64-linux-gnu-gcc dtc fdtoverlay fdtget flex bison bc make git python3 curl; do
   command -v "$tool" >/dev/null || { echo "missing required tool: $tool" >&2; exit 1; }
 done
@@ -94,7 +122,10 @@ if text.count(old) != 1:
     raise SystemExit(f"expected exactly one FSM board include {old!r}")
 path.write_text(text.replace(old, new, 1))
 PY
-python3 "$vrt49/kernel/iio-vrt49-buffer/patch_adrv9009_tx_dma_owner.py" "$dts_dir/$PORT_DTS.dts"
+if [ "$profile" = default ]; then
+  # the vrt49 deframer node takes the TX DMA from the stock DAC-TPL node
+  python3 "$vrt49/kernel/iio-vrt49-buffer/patch_adrv9009_tx_dma_owner.py" "$dts_dir/$PORT_DTS.dts"
+fi
 corundum_drv="$work/corundum-driver"
 fetch_pinned https://github.com/ucsdsysnet/corundum.git "$corundum_sha" "$corundum_drv"
 python3 "$vrt49/kernel/sfp-network/integrate.py" "$linux" "$corundum_drv" "$dts_dir/$PORT_DTS.dts"
@@ -105,8 +136,8 @@ make -C "$linux" -j"$jobs" ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- DTC_FLAGS
 test -s "$linux/arch/arm64/boot/Image"
 test -s "$linux/drivers/misc/axi_timed_command_scheduler.o"
 test -s "$linux/drivers/net/ethernet/corundum/mqnic_main.o"
-dtc -@ -I dts -O dtb -o "$out/vrt49-framer-control.dtbo" "$vrt49/kernel/iio-vrt49-buffer/zynqmp-adrv9009zu11eg-vrt49-control-overlay.dts"
-dtc -@ -I dts -O dtb -o "$out/hopcap.dtbo" "$here/kernel/dts/zynqmp-adrv9009zu11eg-hopcap-overlay.dts"
+dtc -@ -I dts -O dtb -o "$out/vrt49-framer-control.dtbo" "$control_dts"
+dtc -@ -I dts -O dtb -o "$out/hopcap.dtbo" "$hopcap_dts"
 fdtoverlay -i "$dts_dir/$PORT_DTS.dtb" -o "$out/system.dtb" "$out/vrt49-framer-control.dtbo" "$out/hopcap.dtbo"
 cp "$linux/arch/arm64/boot/Image" "$out/Image"
 # fallback module from the same tree (vermagic matches by construction); stock-image experiments only
@@ -123,7 +154,14 @@ chk() { # name command...
   chk ad9545_pll1 sh -c "fdtget -t i '$dtb' /axi/i2c@ff030000/i2c-mux@70/i2c@1/ad9545@4a/pll-clk@1 reg | grep -qx 1"
   chk refclk_rates sh -c "fdtget -t i '$dtb' /axi/i2c@ff030000/i2c-mux@70/i2c@1/ad9545@4a assigned-clock-rates | grep -qx '10000 1413120000 1875000000 30720000 156250000'"
   chk framer_node sh -c "fdtget -t s '$dtb' /fpga-axi@0/iio_vrt49_framer@84a80000 compatible | grep -q adi,axi-vrt49-framer"
-  chk deframer_node sh -c "fdtget -t s '$dtb' /fpga-axi@0/iio_vrt49_deframer@84ab0000 compatible | grep -qx adi,axi-vrt49-dac-tx-1.00.a"
+  if [ "$profile" = timed-dma ]; then
+    chk deframer_absent sh -c "! fdtget -l '$dtb' /fpga-axi@0/iio_vrt49_deframer@84ab0000"
+    chk tx_dma_stock sh -c "fdtget -t s '$dtb' /fpga-axi@0/axi-adrv9009-tx-hpc@84a04000 dma-names | grep -qx tx && fdtget -t x '$dtb' /fpga-axi@0/axi-adrv9009-tx-hpc@84a04000 dmas"
+    chk tick_gate_map sh -c "fdtget -t s '$dtb' /fpga-axi@0/timed-command-scheduler@86000000 adi,stream-gate-map | grep -qx '$TDMA_GATE_MAP'"
+  else
+    chk deframer_node sh -c "fdtget -t s '$dtb' /fpga-axi@0/iio_vrt49_deframer@84ab0000 compatible | grep -qx adi,axi-vrt49-dac-tx-1.00.a"
+    chk tick_gate_map_absent sh -c "! fdtget -t s '$dtb' /fpga-axi@0/timed-command-scheduler@86000000 adi,stream-gate-map"
+  fi
   chk corundum_node sh -c "fdtget -t s '$dtb' /axi/ethernet@a0000000 compatible | grep -qx corundum,mqnic"
   chk rx_filter_node sh -c "fdtget -t s '$dtb' /axi/rx-filter@84aa0000 compatible | grep -qx adi,vrt49-rx-filter-1.0"
   chk tick_node sh -c "fdtget -t s '$dtb' /fpga-axi@0/timed-command-scheduler@86000000 compatible | grep -qx adi,axi-timed-command-scheduler-1.0"
@@ -132,6 +170,13 @@ chk() { # name command...
 } > "$out/dtb-checks.txt"
 cat "$out/dtb-checks.txt"
 grep -q "=false" "$out/dtb-checks.txt" && { echo "DTB checks failed" >&2; exit 1; }
+
+# ---------------------------------------------------------------- JTAG inputs
+if [ -n "$xsa" ]; then
+  test -f "$xsa" || { echo "--xsa $xsa not found" >&2; exit 2; }
+  python3 "$here/scripts/extract_jtag_inputs.py" "$xsa" "$out"
+  cp "$xsa" "$out/system_top.xsa"
+fi
 
 # ---------------------------------------------------------------- BOOT.BIN
 if [ "$skip_boot_bin" = 0 ]; then
@@ -149,20 +194,28 @@ if [ "$skip_boot_bin" = 0 ]; then
 fi
 
 # ---------------------------------------------------------------- provenance
-python3 - "$out" "$linux_sha" "$hopcap_sha" "$xsa" "$port" "$clock_source" <<'PY'
+python3 - "$out" "$linux_sha" "$hopcap_sha" "$xsa" "$port" "$clock_source" "$profile" "$control_dts" "$hopcap_dts" "$here" <<'PY'
 import json, sys, hashlib
 from pathlib import Path
 out, linux_sha, hopcap_sha, xsa = Path(sys.argv[1]), sys.argv[2], sys.argv[3], sys.argv[4]
-port, clock_source = sys.argv[5], sys.argv[6]
+port, clock_source, profile = sys.argv[5], sys.argv[6], sys.argv[7]
+control_dts, hopcap_dts, here = Path(sys.argv[8]), Path(sys.argv[9]), Path(sys.argv[10])
 checks = dict(line.split("=") for line in (out / "dtb-checks.txt").read_text().split())
 prov = {
     "platform": f"adrv9009-zu11eg-{port}", "physical_port": port, "linux_source_sha": linux_sha, "hopcap_source_sha": hopcap_sha,
     "xsa": xsa, "xsa_sha256": hashlib.sha256(Path(xsa).read_bytes()).hexdigest() if xsa and Path(xsa).exists() else None,
     f"{port}_clock_hz": 156250000, f"{port}_clock_source": clock_source,
+    "profile": profile,
     "tick_driver": "in-tree obj-y", "overlays": ["vrt49-framer-control.dtbo", "hopcap.dtbo"],
+    "overlay_sources": {
+        "vrt49-framer-control.dtbo": str(control_dts.relative_to(here)),
+        "hopcap.dtbo": str(hopcap_dts.relative_to(here)),
+    },
+    "boot_modes": (["sd"] if (out / "BOOT.BIN").exists() else [])
+    + (["jtag"] if (out / "system_top.bit").exists() and (out / "psu_init.tcl").exists() else []),
     "dtb_checks": {k: v == "true" for k, v in checks.items()},
 }
 (out / "boot-provenance.json").write_text(json.dumps(prov, indent=2) + "\n")
 PY
-( cd "$out" && sha256sum $(ls BOOT.BIN Image system.dtb hopcap.dtbo vrt49-framer-control.dtbo axi_timed_command_scheduler.ko 2>/dev/null) > SHA256SUMS )
+( cd "$out" && sha256sum $(ls BOOT.BIN system_top.bit psu_init.tcl system_top.xsa Image system.dtb hopcap.dtbo vrt49-framer-control.dtbo axi_timed_command_scheduler.ko 2>/dev/null) > SHA256SUMS )
 echo "boot artifacts -> $out"

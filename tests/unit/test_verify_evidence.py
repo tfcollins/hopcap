@@ -247,3 +247,92 @@ def test_timed_dma_evidence_needs_its_checks_env_and_files(tmp_path):
     assert any("timed-dma profile OK" in e for e in errs)
     assert any("VRT_DAC_TX_ENABLE" in e for e in errs)
     assert any("tick_dma_gate.v" in e for e in errs)
+
+
+def tdma_jtag_boot_dir(tmp_path: Path) -> Path:
+    """build_boot_artifacts.sh --profile timed-dma --skip-boot-bin --xsa ...: a JTAG boot set."""
+    d = tmp_path / "boot-timed-dma"
+    d.mkdir(parents=True)
+    sums = {}
+    for name in (
+        "system_top.bit",
+        "psu_init.tcl",
+        "system_top.xsa",
+        "Image",
+        "system.dtb",
+        "hopcap.dtbo",
+        "vrt49-framer-control.dtbo",
+    ):
+        sums[name] = _write(d / name, name.encode() * 10)
+    (d / "SHA256SUMS").write_text("".join(f"{h}  {n}\n" for n, h in sums.items()))
+    clock_source, output = ve.PORT_CLOCK["sfp"]
+    prov = {
+        "platform": "adrv9009-zu11eg-sfp",
+        "physical_port": "sfp",
+        "profile": "timed-dma",
+        "linux_source_sha": PINS["linux"]["revision"],
+        "sfp_clock_source": clock_source,
+        "xsa_sha256": sums["system_top.xsa"],
+        "tick_driver": "in-tree obj-y",
+        "dtb_checks": {
+            f"{output}_output_clk": True,
+            **{name: True for name in ve.BOOT_DTB_CHECKS["timed-dma"]},
+        },
+    }
+    (d / "boot-provenance.json").write_text(json.dumps(prov))
+    return d
+
+
+def _edit_prov(d: Path, **changes) -> None:
+    prov = json.loads((d / "boot-provenance.json").read_text())
+    prov.update(changes)
+    (d / "boot-provenance.json").write_text(json.dumps(prov))
+
+
+def test_timed_dma_jtag_boot_set_passes_without_boot_bin(tmp_path):
+    assert ve.verify_boot(tdma_jtag_boot_dir(tmp_path)) == []
+
+
+def test_jtag_boot_set_needs_both_inputs_hashed(tmp_path):
+    d = tdma_jtag_boot_dir(tmp_path)
+    (d / "psu_init.tcl").unlink()
+    assert any("psu_init.tcl missing" in e for e in ve.verify_boot(d))
+    d2 = tdma_jtag_boot_dir(tmp_path / "b")
+    (d2 / "system_top.bit").write_bytes(b"other")
+    assert any("system_top.bit sha256 mismatch" in e for e in ve.verify_boot(d2))
+
+
+def test_boot_set_without_boot_bin_or_jtag_inputs_fails(tmp_path):
+    d = boot_dir(tmp_path, "sfp")
+    (d / "BOOT.BIN").unlink()
+    assert any("BOOT.BIN missing" in e for e in ve.verify_boot(d))
+
+
+def test_jtag_xsa_must_be_the_one_provenance_records(tmp_path):
+    d = tdma_jtag_boot_dir(tmp_path)
+    _edit_prov(d, xsa_sha256="0" * 64)
+    assert any("xsa_sha256" in e for e in ve.verify_boot(d))
+
+
+def test_timed_dma_boot_requires_its_dtb_checks(tmp_path):
+    for check in ("deframer_absent", "tx_dma_stock", "tick_gate_map"):
+        d = tdma_jtag_boot_dir(tmp_path / check)
+        prov = json.loads((d / "boot-provenance.json").read_text())
+        del prov["dtb_checks"][check]
+        (d / "boot-provenance.json").write_text(json.dumps(prov))
+        assert any(f"dtb check {check} not recorded" in e for e in ve.verify_boot(d)), check
+
+
+def test_timed_dma_boot_rejects_unknown_profile_and_qsfp(tmp_path):
+    d = tdma_jtag_boot_dir(tmp_path)
+    _edit_prov(d, profile="bogus")
+    assert any("profile" in e for e in ve.verify_boot(d))
+    d2 = tdma_jtag_boot_dir(tmp_path / "q")
+    clock_source, output = ve.PORT_CLOCK["qsfp"]
+    prov = json.loads((d2 / "boot-provenance.json").read_text())
+    prov.update(
+        physical_port="qsfp", platform="adrv9009-zu11eg-qsfp", qsfp_clock_source=clock_source
+    )
+    prov["dtb_checks"][f"{output}_output_clk"] = True
+    (d2 / "boot-provenance.json").write_text(json.dumps(prov))
+    assert any("SFP only" in e for e in ve.verify_boot(d2))
