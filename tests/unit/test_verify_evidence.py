@@ -192,3 +192,58 @@ def test_cli_exit_codes(tmp_path):
         text=True,
     )
     assert r.returncode == 1
+
+
+# ---------------------------------------------------------------- timed-dma profile (P3b G1)
+
+
+def tdma_bitstream_dir(tmp_path: Path) -> Path:
+    d = bitstream_dir(tmp_path, port="sfp")
+    man = json.loads((d / "MANIFEST.json").read_text())
+    man["profile"] = "timed-dma"
+    man["build_env"] = {"VRT_DAC_TX_ENABLE": "0"}
+    man["files"].update({rel: "0" * 64 for rel in ve.TDMA_MANIFEST_FILES})
+    _rewrite_manifest(d, man)
+    (d / "summary.txt").write_text(
+        (d / "summary.txt")
+        .read_text()
+        .replace(
+            "check-sfp-rx-netlist: Stock RX DMA connected; SFP taps raw RX0 I/Q and valid: PASS\n",
+            "check-sfp-rx-netlist: SKIPPED (profile timed-dma: by design)\n",
+        )
+        .replace(
+            "check_hop_netlist: OK\n",
+            "check_hop_netlist: profile timed-dma: OK\ncheck_hop_netlist: OK\n",
+        )
+        + "profile=timed-dma\n"
+    )
+    return d
+
+
+def test_timed_dma_evidence_passes_with_the_rx_check_skipped(tmp_path):
+    assert ve.verify_bitstream(tdma_bitstream_dir(tmp_path)) == []
+
+
+def test_a_skipped_rx_check_is_refused_on_the_default_profile(tmp_path):
+    d = tdma_bitstream_dir(tmp_path)
+    man = json.loads((d / "MANIFEST.json").read_text())
+    man["profile"] = "default"
+    _rewrite_manifest(d, man)
+    errs = ve.verify_bitstream(d)
+    assert any("check-sfp-rx-netlist did not report PASS" in e for e in errs)
+    assert any("summary profile" in e for e in errs)
+
+
+def test_timed_dma_evidence_needs_its_checks_env_and_files(tmp_path):
+    d = tdma_bitstream_dir(tmp_path)
+    (d / "summary.txt").write_text(
+        (d / "summary.txt").read_text().replace("check_hop_netlist: profile timed-dma: OK\n", "")
+    )
+    man = json.loads((d / "MANIFEST.json").read_text())
+    man["build_env"] = {}
+    del man["files"]["library/tick_dma_gate/tick_dma_gate.v"]
+    _rewrite_manifest(d, man)
+    errs = ve.verify_bitstream(d)
+    assert any("timed-dma profile OK" in e for e in errs)
+    assert any("VRT_DAC_TX_ENABLE" in e for e in errs)
+    assert any("tick_dma_gate.v" in e for e in errs)
