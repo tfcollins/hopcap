@@ -3,8 +3,8 @@
   "note": "Fail-closed upstream pins. tick/vrt49 must equal the submodule HEADs; adi_hdl/corundum/linux/u_boot/atf must equal what vrt49's hdl-corundum.yml and ci/platform-artifacts.json build against at the pinned vrt49 revision.",
   "tick": {
     "repository": "https://github.com/tfcollins/tick",
-    "revision": "bc3e8f578b8a18b23631bd66d90d6d78db86f6f3",
-    "why": "P3b timed-dma boot set; branch pins, not for main. tick p3b-spike-gate bc3e8f5 = 1787c33 plus the opt-in converter-clock timebase (TICK_TIMEBASE_CLK in the tron fragment, scheduler RTL unchanged) and the driver enabling its devicetree clock before the first register access (libdatax P3b option 1, datax_sdk_sdr#40). The timed-dma profile sets TICK_TIMEBASE_CLK=core_clk_a (122.88 MHz); the default profile keeps sys_cpu_clk."
+    "revision": "841638f5c92fad5dda26b407c7004d57870361cd",
+    "why": "P3b timed-dma boot set; branch pins, not for main. tick p3b-spike-gate 841638f = 1787c33 plus the opt-in converter-clock timebase (TICK_TIMEBASE_CLK in the tron fragment, scheduler RTL unchanged) and the driver enabling its devicetree clock before the first register access, with the scheduler's S_AXI FREQ_HZ matched to the clock converter (libdatax P3b option 1, datax_sdk_sdr#40). The timed-dma profile sets TICK_TIMEBASE_CLK=core_clk_a (122.88 MHz); the default profile keeps sys_cpu_clk."
   },
   "vrt49": {
     "repository": "https://github.com/tfcollins/vrt49",
