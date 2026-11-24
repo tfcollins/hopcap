@@ -3,8 +3,8 @@
   "note": "Fail-closed upstream pins. tick/vrt49 must equal the submodule HEADs; adi_hdl/corundum/linux/u_boot/atf must equal what vrt49's hdl-corundum.yml and ci/platform-artifacts.json build against at the pinned vrt49 revision.",
   "tick": {
     "repository": "https://github.com/tfcollins/tick",
-    "revision": "3455531e737080178a0cfa5cfc082297a6534153",
-    "why": "P3b G1 candidate; branch pins, not for main. tick p3b-spike-gate 3455531 (tick_dma_gate + tick_fifo_tag_adapter, spike G2/G3); scheduler RTL, IP tcl, ZU11EG fragment and prepare_adi_hdl_adrv9009.py identical to the previous pin 1b8a0c7."
+    "revision": "1787c33f09c62db66bd93580d52ec81414f2de2f",
+    "why": "P3b timed-dma boot set; branch pins, not for main. tick p3b-spike-gate 1787c33 = 3455531 (the G1 image's pin) plus the Tick driver's stream_gate_map attribute from adi,stream-gate-map (tick#45). git diff 3455531 1787c33 -- hdl/ is empty, so the G1 XSA built at 3455531 is still this pin's bitstream; the change is kernel driver, binding, docs and tests only."
   },
   "vrt49": {
     "repository": "https://github.com/tfcollins/vrt49",
