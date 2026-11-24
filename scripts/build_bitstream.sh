@@ -97,6 +97,8 @@ fi
 python3 "$here/scripts/check_hop_netlist.py" "$hdl" --port "$port" --profile "$profile" 2>&1 | tee -a "$evidence/summary.txt"
 cp "$bit" "$xsa" "$timing" "$evidence/"
 echo "timing_report=$(basename "$timing")" | tee -a "$evidence/summary.txt"
+# Routed period of core_clk_a's clock (verify_evidence.py: timed-dma redefines it at 8.138 ns).
+echo "tx_dev_clk_period_ns=$(awk '$1=="tx_dev_clk" && $(NF-1) ~ /^[0-9.]+$/ {print $(NF-1); exit}' "$timing")" | tee -a "$evidence/summary.txt"
 cp "$ws/MANIFEST.json" "$evidence/"
 ( cd "$evidence" && sha256sum system_top.bit system_top.xsa MANIFEST.json > SHA256SUMS )
 {

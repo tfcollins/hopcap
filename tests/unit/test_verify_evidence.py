@@ -201,7 +201,7 @@ def tdma_bitstream_dir(tmp_path: Path) -> Path:
     d = bitstream_dir(tmp_path, port="sfp")
     man = json.loads((d / "MANIFEST.json").read_text())
     man["profile"] = "timed-dma"
-    man["build_env"] = {"VRT_DAC_TX_ENABLE": "0"}
+    man["build_env"] = {"VRT_DAC_TX_ENABLE": "0", "TICK_TIMEBASE_CLK": "core_clk_a"}
     man["files"].update({rel: "0" * 64 for rel in ve.TDMA_MANIFEST_FILES})
     _rewrite_manifest(d, man)
     (d / "summary.txt").write_text(
@@ -216,6 +216,7 @@ def tdma_bitstream_dir(tmp_path: Path) -> Path:
             "check_hop_netlist: profile timed-dma: OK\ncheck_hop_netlist: OK\n",
         )
         + "profile=timed-dma\n"
+        + "tx_dev_clk_period_ns=8.138\n"
     )
     return d
 
@@ -232,6 +233,22 @@ def test_a_skipped_rx_check_is_refused_on_the_default_profile(tmp_path):
     errs = ve.verify_bitstream(d)
     assert any("check-sfp-rx-netlist did not report PASS" in e for e in errs)
     assert any("summary profile" in e for e in errs)
+
+
+def test_timed_dma_evidence_needs_the_real_core_clk_a_period(tmp_path):
+    """ADI's 4.00 ns winning over system_timed_dma_cdc.xdc (file order) is refused."""
+    d = tdma_bitstream_dir(tmp_path)
+    (d / "summary.txt").write_text(
+        (d / "summary.txt")
+        .read_text()
+        .replace("tx_dev_clk_period_ns=8.138\n", "tx_dev_clk_period_ns=4.000\n")
+    )
+    man = json.loads((d / "MANIFEST.json").read_text())
+    del man["build_env"]["TICK_TIMEBASE_CLK"]
+    _rewrite_manifest(d, man)
+    errs = ve.verify_bitstream(d)
+    assert any("tx_dev_clk period '4.000'" in e for e in errs)
+    assert any("TICK_TIMEBASE_CLK=core_clk_a" in e for e in errs)
 
 
 def test_timed_dma_evidence_needs_its_checks_env_and_files(tmp_path):
@@ -315,7 +332,14 @@ def test_jtag_xsa_must_be_the_one_provenance_records(tmp_path):
 
 
 def test_timed_dma_boot_requires_its_dtb_checks(tmp_path):
-    for check in ("deframer_absent", "tx_dma_stock", "tick_gate_map"):
+    for check in (
+        "deframer_absent",
+        "tx_dma_stock",
+        "tick_gate_map",
+        "tick_clock_hmc7044_ch6",
+        "core_clk_a_122m88",
+        "core_clk_b_245m76",
+    ):
         d = tdma_jtag_boot_dir(tmp_path / check)
         prov = json.loads((d / "boot-provenance.json").read_text())
         del prov["dtb_checks"][check]

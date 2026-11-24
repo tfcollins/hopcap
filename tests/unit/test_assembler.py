@@ -377,6 +377,20 @@ def test_tdma_project_edit_adds_the_cdc_xdc_for_implementation_only():
     assert once.index(aw.TDMA_CDC_IMPL_ONLY) < once.index("adi_project_run")
 
 
+def test_tdma_cdc_xdc_constrains_core_clk_a_at_its_real_period():
+    """ADI declares tx_dev_clk (core_clk_a) at 4.00 ns; Tick on it needs the real 8.138 ns."""
+    xdc = (ROOT / "hdl" / aw.TDMA_CDC_XDC).read_text()
+    lines = [ln.split("#")[0].strip() for ln in xdc.splitlines()]
+    assert "create_clock -name tx_dev_clk -period 8.138 [get_ports core_clk_a_p]" in lines
+    # sysref_a's input delays are bound to the redefined clock object, so they are repeated
+    for edge in ("-max", "-min"):
+        assert f"set_input_delay -clock tx_dev_clk {edge} 4 [get_ports sysref_a_p]" in lines
+    # read after ADI's adrv9009zu11eg_constr.xdc, which declares the 4.00 ns clock
+    sp = (VRT49 / "hdl/projects/adrv9009zu11eg_vrt49_corundum/system_project.tcl").read_text()
+    once = aw.patch_system_project_tdma(aw.patch_system_project(sp))
+    assert once.index("adrv9009zu11eg_constr.xdc") < once.index(aw.TDMA_CDC_ENTRY)
+
+
 def test_tdma_profile_is_sfp_only(fake_tree):
     with pytest.raises(aw.AssembleError, match="sfp"):
         aw.assemble(

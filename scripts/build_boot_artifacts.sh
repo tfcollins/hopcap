@@ -160,6 +160,10 @@ chk() { # name command...
     chk tick_gate_map sh -c "fdtget -t s '$dtb' /fpga-axi@0/timed-command-scheduler@86000000 adi,stream-gate-map | grep -qx '$TDMA_GATE_MAP'"
     # Tick on core_clk_a (TICK_TIMEBASE_CLK=core_clk_a): clocks = <&hmc7044 6>, 122.88 MHz.
     chk tick_clock_hmc7044_ch6 sh -c "p=\$(fdtget -t x '$dtb' \$(fdtget -t s '$dtb' /__symbols__ hmc7044) phandle) && fdtget -t x '$dtb' /fpga-axi@0/timed-command-scheduler@86000000 clocks | grep -qx \"\$p 6\""
+    # system_timed_dma_cdc.xdc constrains core_clk_a at 8.138 ns (ADI declares 4.00) and bounds
+    # the tagger payload by one core_clk_b period (4.069 ns): tie both to this DTB's HMC7044.
+    chk core_clk_a_122m88 sh -c "n=\$(fdtget -t s '$dtb' /__symbols__ hmc7044) && f=\$(fdtget -t u '$dtb' \$n adi,pll2-output-frequency) && d=\$(fdtget -t u '$dtb' \$n/channel@6 adi,divider) && [ \$((f % d)) -eq 0 ] && [ \$((f / d)) -eq 122880000 ]"
+    chk core_clk_b_245m76 sh -c "n=\$(fdtget -t s '$dtb' /__symbols__ hmc7044) && f=\$(fdtget -t u '$dtb' \$n adi,pll2-output-frequency) && d=\$(fdtget -t u '$dtb' \$n/channel@7 adi,divider) && [ \$((f % d)) -eq 0 ] && [ \$((f / d)) -eq 245760000 ]"
   else
     chk deframer_node sh -c "fdtget -t s '$dtb' /fpga-axi@0/iio_vrt49_deframer@84ab0000 compatible | grep -qx adi,axi-vrt49-dac-tx-1.00.a"
     chk tick_gate_map_absent sh -c "! fdtget -t s '$dtb' /fpga-axi@0/timed-command-scheduler@86000000 adi,stream-gate-map"

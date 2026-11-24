@@ -37,6 +37,8 @@ TDMA_MANIFEST_FILES = (
     "projects/adrv9009zu11eg_vrt49_corundum/system_bd_timed_dma.tcl",
     "projects/adrv9009zu11eg_vrt49_corundum/system_timed_dma_cdc.xdc",
 )
+# Tick on core_clk_a (HMC7044 ch6, 122.88 MHz); ADI's XDC declares 4.00 ns.
+TDMA_TX_DEV_CLK_PERIOD_NS = "8.138"
 
 
 def sha256(path: Path) -> str:
@@ -97,6 +99,15 @@ def verify_bitstream(d: Path, *, release: bool = False) -> list[str]:
             errors.append("check-sfp-rx-netlist not recorded as skipped for timed-dma")
         if man.get("build_env", {}).get("VRT_DAC_TX_ENABLE") != "0":
             errors.append("timed-dma MANIFEST build_env lacks VRT_DAC_TX_ENABLE=0")
+        if man.get("build_env", {}).get("TICK_TIMEBASE_CLK") != "core_clk_a":
+            errors.append("timed-dma MANIFEST build_env lacks TICK_TIMEBASE_CLK=core_clk_a")
+        # system_timed_dma_cdc.xdc redefines tx_dev_clk (core_clk_a) at its real period; if a
+        # file-order change let ADI's 4.00 ns win, the routed clock summary shows it here.
+        period = _kv(text).get("tx_dev_clk_period_ns")
+        if period != TDMA_TX_DEV_CLK_PERIOD_NS:
+            errors.append(
+                f"timed-dma routed tx_dev_clk period {period!r} != {TDMA_TX_DEV_CLK_PERIOD_NS}"
+            )
         for rel in TDMA_MANIFEST_FILES:
             if rel not in man.get("files", {}):
                 errors.append(f"timed-dma MANIFEST does not list {rel}")
@@ -143,6 +154,9 @@ BOOT_DTB_CHECKS = {
         "deframer_absent",
         "tx_dma_stock",
         "tick_gate_map",
+        "tick_clock_hmc7044_ch6",
+        "core_clk_a_122m88",
+        "core_clk_b_245m76",
     ),
 }
 # A boot set boots from SD (BOOT.BIN) or over JTAG (system_top.bit + psu_init.tcl from the XSA).

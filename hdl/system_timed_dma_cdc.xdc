@@ -13,6 +13,20 @@
 # tagger cross core_clk_a -> core_clk_b (ch7, 245.76 MHz, same PLL2): frequency-locked, but
 # Vivado sees two unrelated primary clocks, so the synchronizers still get their cuts.
 
+# core_clk_a period.  ADI's adrv9009zu11eg_constr.xdc declares tx_dev_clk on core_clk_a_p at a
+# generic 4.00 ns (250 MHz).  On this board's profile HMC7044 ch6 divides PLL2 2949.12 MHz by
+# 24: 122.88 MHz (build_boot_artifacts.sh asserts both numbers in the DTB).  Tick's 64-bit
+# compare paths need the real period (they miss 4.00 ns by ~2.8 ns and fit 8.138 ns), so
+# redefine the clock under the same name.  This file is read after ADI's (system_project.tcl
+# file order); Vivado warns once (Constraints 18-619, "overwriting the previous clock").
+# build_bitstream.sh records the routed period and verify_evidence.py requires 8.138.  The
+# two sysref_a input delays are repeated so they survive the redefinition (checked on the
+# routed checkpoint: inter-clock paths and unconstrained-input counts unchanged).  Any design that moves Tick onto core_clk_a
+# must constrain the real period the same way.
+create_clock -name tx_dev_clk -period 8.138 [get_ports core_clk_a_p]
+set_input_delay -clock tx_dev_clk -max 4 [get_ports sysref_a_p]
+set_input_delay -clock tx_dev_clk -min 4 [get_ports sysref_a_p]
+
 # RX gate: level/mode leave the scheduler (core_clk_a) through a tick-clock source register
 # (SRC_REG) and enter separate two-flop synchronizers (ASYNC_REG) in core_clk_b.  Each is a
 # quasi-static single bit changed by separate scheduler commands, so only the first stage is
