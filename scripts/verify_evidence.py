@@ -26,6 +26,19 @@ PORT_CONTRACTS = {
     "qsfp": {"configure_dual_talise_links.py", "check-zu11eg-qsfp-contract.py"},
 }
 LEGACY_PORT = "qsfp"
+# Build profiles (assemble_workspace.py --profile). Evidence predating profiles is "default".
+PROFILES = ("default", "timed-dma")
+# timed-dma replaces vrt49's RX netlist check (it asserts cpack feeds the RX DMA directly)
+# with check_hop_netlist --profile timed-dma, and must carry Tick's P3b RTL and fragment.
+TDMA_MANIFEST_FILES = (
+    "library/tick_dma_gate/tick_dma_gate.v",
+    "library/tick_fifo_tag_adapter/tick_fifo_tag_adapter.v",
+    "library/tick_stream_timestamp_tag/tick_stream_timestamp_tag.v",
+    "projects/adrv9009zu11eg_vrt49_corundum/system_bd_timed_dma.tcl",
+    "projects/adrv9009zu11eg_vrt49_corundum/system_timed_dma_cdc.xdc",
+)
+# Tick on core_clk_a (HMC7044 ch6, 122.88 MHz); ADI's XDC declares 4.00 ns.
+TDMA_TX_DEV_CLK_PERIOD_NS = "8.138"
 
 
 def sha256(path: Path) -> str:
@@ -75,9 +88,34 @@ def verify_bitstream(d: Path, *, release: bool = False) -> list[str]:
         errors.append("timing check did not report 'Timing constraints are met'")
     if "check_hop_netlist: OK" not in text:
         errors.append("check_hop_netlist did not report OK")
-    if not re.search(r"check-sfp-rx-netlist: .*PASS", text):
+    man = json.loads((d / "MANIFEST.json").read_text()) if (d / "MANIFEST.json").exists() else {}
+    profile = man.get("profile", "default")
+    if profile not in PROFILES:
+        errors.append(f"MANIFEST profile {profile!r} is not one of {PROFILES}")
+    elif profile == "timed-dma":
+        if "check_hop_netlist: profile timed-dma: OK" not in text:
+            errors.append("check_hop_netlist did not report the timed-dma profile OK")
+        if not re.search(r"check-sfp-rx-netlist: SKIPPED \(profile timed-dma", text):
+            errors.append("check-sfp-rx-netlist not recorded as skipped for timed-dma")
+        if man.get("build_env", {}).get("VRT_DAC_TX_ENABLE") != "0":
+            errors.append("timed-dma MANIFEST build_env lacks VRT_DAC_TX_ENABLE=0")
+        if man.get("build_env", {}).get("TICK_TIMEBASE_CLK") != "core_clk_a":
+            errors.append("timed-dma MANIFEST build_env lacks TICK_TIMEBASE_CLK=core_clk_a")
+        # system_timed_dma_cdc.xdc redefines tx_dev_clk (core_clk_a) at its real period; if a
+        # file-order change let ADI's 4.00 ns win, the routed clock summary shows it here.
+        period = _kv(text).get("tx_dev_clk_period_ns")
+        if period != TDMA_TX_DEV_CLK_PERIOD_NS:
+            errors.append(
+                f"timed-dma routed tx_dev_clk period {period!r} != {TDMA_TX_DEV_CLK_PERIOD_NS}"
+            )
+        for rel in TDMA_MANIFEST_FILES:
+            if rel not in man.get("files", {}):
+                errors.append(f"timed-dma MANIFEST does not list {rel}")
+    elif not re.search(r"check-sfp-rx-netlist: .*PASS", text):
         errors.append("check-sfp-rx-netlist did not report PASS")
     kv = _kv(text)
+    if kv.get("profile", "default") != profile:
+        errors.append(f"summary profile {kv.get('profile', 'default')} != MANIFEST {profile}")
     for key in ("adi_hdl", "corundum"):
         if kv.get(key) != PINS[key]["revision"]:
             errors.append(f"{key} in summary ({kv.get(key)}) != pins.json {PINS[key]['revision']}")
@@ -87,9 +125,7 @@ def verify_bitstream(d: Path, *, release: bool = False) -> list[str]:
         errors.append("bitstream_sha256 in summary does not match system_top.bit")
     if "v2025.1" not in kv.get("vivado", ""):
         errors.append(f"vivado version {kv.get('vivado')!r} is not 2025.1")
-    man_path = d / "MANIFEST.json"
-    if man_path.exists():
-        man = json.loads(man_path.read_text())
+    if man:
         port = man.get("physical_port", LEGACY_PORT)
         if port not in PORT_CONTRACTS:
             errors.append(f"MANIFEST physical_port {port!r} is not sfp or qsfp")
@@ -107,15 +143,45 @@ def verify_bitstream(d: Path, *, release: bool = False) -> list[str]:
     return errors
 
 
+# DTB checks build_boot_artifacts.sh must have recorded, per profile (besides the port refclk).
+BOOT_DTB_CHECKS = {
+    "default": ("tick_node", "hop_node", "framer_node"),
+    # no vrt49 deframer (VRT_DAC_TX_ENABLE=0), stock TX DMA, the image's stream gate map
+    "timed-dma": (
+        "tick_node",
+        "hop_node",
+        "framer_node",
+        "deframer_absent",
+        "tx_dma_stock",
+        "tick_gate_map",
+        "tick_clock_hmc7044_ch6",
+        "core_clk_a_122m88",
+        "core_clk_b_245m76",
+    ),
+}
+# A boot set boots from SD (BOOT.BIN) or over JTAG (system_top.bit + psu_init.tcl from the XSA).
+JTAG_INPUTS = ("system_top.bit", "psu_init.tcl")
+
+
 def verify_boot(d: Path) -> list[str]:
     errors: list[str] = []
+    boot = ("BOOT.BIN",) if (d / "BOOT.BIN").exists() or not (d / JTAG_INPUTS[0]).exists() else ()
+    jtag = JTAG_INPUTS if (d / JTAG_INPUTS[0]).exists() or (d / JTAG_INPUTS[1]).exists() else ()
     _check_sums(
-        d, errors, ("BOOT.BIN", "Image", "system.dtb", "hopcap.dtbo", "vrt49-framer-control.dtbo")
+        d,
+        errors,
+        (*boot, *jtag, "Image", "system.dtb", "hopcap.dtbo", "vrt49-framer-control.dtbo"),
     )
     prov_path = d / "boot-provenance.json"
     if not prov_path.exists():
         return [*errors, "boot-provenance.json missing"]
     prov = json.loads(prov_path.read_text())
+    profile = prov.get("profile", "default")
+    if profile not in PROFILES:
+        return [*errors, f"profile {profile!r} is not one of {PROFILES}"]
+    xsa = d / "system_top.xsa"
+    if jtag and xsa.exists() and sha256(xsa) != prov.get("xsa_sha256"):
+        errors.append("system_top.xsa sha256 != boot-provenance xsa_sha256")
     port = prov.get("physical_port", LEGACY_PORT)
     if port not in PORT_CLOCK:
         return [*errors, f"physical_port {port!r} is not sfp or qsfp"]
@@ -129,7 +195,9 @@ def verify_boot(d: Path) -> list[str]:
     for check, ok in (prov.get("dtb_checks") or {}).items():
         if not ok:
             errors.append(f"dtb check {check} failed")
-    for required in (f"{output}_output_clk", "tick_node", "hop_node", "framer_node"):
+    if profile == "timed-dma" and port != "sfp":
+        errors.append("profile timed-dma is SFP only")
+    for required in (f"{output}_output_clk", *BOOT_DTB_CHECKS[profile]):
         if required not in (prov.get("dtb_checks") or {}):
             errors.append(f"dtb check {required} not recorded")
     return errors

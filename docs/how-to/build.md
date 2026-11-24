@@ -30,6 +30,26 @@ applies Tick's `patch_system_top()` to the port's top-level, edits the project f
 lines, applies `overlays/patches/*.patch`, runs vrt49's dual-Talise check (plus the QSFP pinout
 check for `qsfp`), and writes `MANIFEST.json` with the SHA-256 of every staged file.
 
+### Profile `timed-dma` (libdatax P3b, image candidate A)
+
+`--profile timed-dma` (SFP only) assembles the P3b image on top of the composite: Tick's
+`tick_dma_gate` on the RX cpack `fifo_wr_en`/`reset` pins and between upack and the TX TPL,
+`tick_fifo_tag_adapter` (with the unmodified `tick_stream_timestamp_tag`) between cpack and the
+RX DMA, gate bits 0/1 level and 2/3 mode from Tick's `stream_gate_en`, the stock TX DMA →
+`axi_tx_fifo` path (`VRT_DAC_TX_ENABLE=0`, recorded as MANIFEST `build_env`), and chip B's FHM
+trigger on `adrv9009_gpio_00_b`. Sources: `hdl/system_bd_timed_dma.tcl`,
+`hdl/system_timed_dma_cdc.xdc`, the chip-B edit in `scripts/assemble_workspace.py`.
+
+```sh
+python3 scripts/assemble_workspace.py --build-root build/ws-tdma --fetch --port sfp --profile timed-dma
+```
+
+The build exports `build_env`, skips vrt49's `check-sfp-rx-netlist.py` (it asserts cpack feeds
+the RX DMA directly, which this profile replaces by design) and runs
+`check_hop_netlist.py --profile timed-dma`, which re-asserts the VRT tap invariants on the TPL
+nets plus the gate, tagger, TX and chip-B wiring. `verify_evidence.py bitstream` follows the
+MANIFEST profile.
+
 ## 2. Synthesize (Vivado 2025.1)
 
 ```sh
@@ -52,6 +72,25 @@ python3 scripts/verify_evidence.py boot evidence/boot-<stamp>
 Needs `aarch64-linux-gnu-gcc`, `dtc`, `fdtoverlay`, `fdtget`; BOOT.BIN additionally needs
 `xsct` and `bootgen` (pass `--skip-boot-bin` elsewhere and finish on a Vivado host). The Tick
 driver is built **in-tree** (`obj-y`), so there is no module/vermagic step.
+
+With `--xsa`, the script also writes the JTAG boot inputs (`system_top.bit`, `psu_init.tcl`, via
+`scripts/extract_jtag_inputs.py`) and a copy of the XSA, all listed in `SHA256SUMS`. A set with
+those and no BOOT.BIN is a JTAG boot set, which `verify_evidence.py boot` accepts.
+
+The `timed-dma` workspace (libdatax P3b, SFP only) needs the matching boot profile:
+
+```sh
+scripts/build_boot_artifacts.sh --port sfp --profile timed-dma --skip-boot-bin \
+    --xsa evidence/bitstream-<stamp>/system_top.xsa --out evidence/boot-timed-dma-<stamp>
+```
+
+It uses `kernel/dts/zynqmp-adrv9009zu11eg-vrt49-control-timed-dma-overlay.dts` (vrt49's control
+overlay without the deframer node, because `VRT_DAC_TX_ENABLE=0` leaves no `vrt49_dac_tx` at
+0x84AB0000) and `kernel/dts/zynqmp-adrv9009zu11eg-hopcap-timed-dma-overlay.dts` (the Tick node
+carries `adi,stream-gate-map`, which the Tick driver exposes as `stream_gate_map`). It skips
+`patch_adrv9009_tx_dma_owner.py`, so the stock `axi-adrv9009-tx-hpc` node keeps the TX DMA. The
+DTB checks assert that the deframer is absent, that the stock node still has its `dmas`, and the
+exact gate map.
 
 ## Upstream dependencies carried as patches
 

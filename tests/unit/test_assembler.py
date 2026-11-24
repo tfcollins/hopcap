@@ -334,3 +334,167 @@ def test_cli_dry_run_lists_actions_without_touching_tree(fake_tree):
     )
     assert before == after
     assert "vrt49_fhm_hop_ctrl" in r.stdout
+
+
+# ---------------------------------------------------------------- timed-dma profile (P3b G1)
+
+# vrt49 >= 7b11305 closes the first project file list after its CDC xdc and splices in the
+# opt-in feature constraints; the pre-#81 layout keeps a trailing backslash.
+NEW_SP = (
+    '  "$ad_hdl_dir/library/common/ad_iobuf.v"] $physical_files [list \\\n'
+    '  "system_vrt49_cdc.xdc"] $vrt49_feature_cdc_files [list \\\n'
+    '  "other.tcl" ]]\n'
+    "set_property strategy Performance_ExploreWithRemap [get_runs impl_1]\n\n"
+    "adi_project_run adrv9009zu11eg_vrt49_corundum\n"
+)
+
+
+def test_project_edit_accepts_the_feature_cdc_layout():
+    once = aw.patch_system_project(NEW_SP)
+    assert aw.patch_system_project(once) == once
+    # still one Tcl list element each, after vrt49's CDC xdc and before the splice
+    assert (
+        '  "system_vrt49_cdc.xdc" \\\n  '
+        + aw.TICK_RTL_ENTRY
+        + " \\\n  "
+        + aw.PPS_CDC_ENTRY
+        + "] $vrt49_feature_cdc_files [list \\"
+    ) in once
+    partial = NEW_SP.replace(
+        '"system_vrt49_cdc.xdc"]', '"system_vrt49_cdc.xdc" \\\n  ' + aw.TICK_RTL_ENTRY + "]"
+    )
+    upgraded = aw.patch_system_project(partial)
+    assert upgraded.count(aw.TICK_RTL_ENTRY) == 1 and upgraded.count(aw.PPS_CDC_ENTRY) == 1
+    with pytest.raises(aw.AssembleError, match="system_vrt49_cdc"):
+        aw.patch_system_project(NEW_SP.replace("system_vrt49_cdc.xdc", "other_cdc.xdc"))
+
+
+def test_tdma_project_edit_adds_the_cdc_xdc_for_implementation_only():
+    once = aw.patch_system_project_tdma(NEW_SP)
+    assert aw.patch_system_project_tdma(once) == once
+    assert once.index(aw.PPS_CDC_ENTRY) < once.index(aw.TDMA_CDC_ENTRY)
+    assert once.index(aw.TDMA_CDC_ENTRY) < once.index("$vrt49_feature_cdc_files")
+    assert once.index(aw.TDMA_CDC_IMPL_ONLY) < once.index("adi_project_run")
+
+
+def test_tdma_cdc_xdc_constrains_core_clk_a_at_its_real_period():
+    """ADI declares tx_dev_clk (core_clk_a) at 4.00 ns; Tick on it needs the real 8.138 ns."""
+    xdc = (ROOT / "hdl" / aw.TDMA_CDC_XDC).read_text()
+    lines = [ln.split("#")[0].strip() for ln in xdc.splitlines()]
+    assert "create_clock -name tx_dev_clk -period 8.138 [get_ports core_clk_a_p]" in lines
+    # sysref_a's input delays are bound to the redefined clock object, so they are repeated
+    for edge in ("-max", "-min"):
+        assert f"set_input_delay -clock tx_dev_clk {edge} 4 [get_ports sysref_a_p]" in lines
+    # read after ADI's adrv9009zu11eg_constr.xdc, which declares the 4.00 ns clock
+    sp = (VRT49 / "hdl/projects/adrv9009zu11eg_vrt49_corundum/system_project.tcl").read_text()
+    once = aw.patch_system_project_tdma(aw.patch_system_project(sp))
+    assert once.index("adrv9009zu11eg_constr.xdc") < once.index(aw.TDMA_CDC_ENTRY)
+
+
+def test_tdma_profile_is_sfp_only(fake_tree):
+    with pytest.raises(aw.AssembleError, match="sfp"):
+        aw.assemble(
+            fake_tree["root"],
+            adi_hdl=fake_tree["adi"],
+            corundum=fake_tree["corundum"],
+            check_pins=False,
+            contract_checks=False,
+            port="qsfp",
+            profile="timed-dma",
+        )
+    with pytest.raises(aw.AssembleError, match="profile"):
+        aw.assemble(
+            fake_tree["root"],
+            adi_hdl=fake_tree["adi"],
+            corundum=fake_tree["corundum"],
+            check_pins=False,
+            contract_checks=False,
+            profile="nope",
+        )
+
+
+def test_tdma_assembly_stages_the_profile_and_routes_chip_b(fake_tree):
+    adi = fake_tree["adi"]
+    manifest = aw.assemble(
+        fake_tree["root"],
+        adi_hdl=adi,
+        corundum=fake_tree["corundum"],
+        check_pins=False,
+        contract_checks=False,
+        port="sfp",
+        profile="timed-dma",
+    )
+    assert manifest["profile"] == "timed-dma"
+    assert manifest["build_env"] == {"VRT_DAC_TX_ENABLE": "0", "TICK_TIMEBASE_CLK": "core_clk_a"}
+    for rel in aw.TDMA_TICK_RTL:
+        assert (adi / rel).read_bytes() == (TICK / "hdl" / rel).read_bytes()
+        assert manifest["files"][str(rel)] == aw.sha256(TICK / "hdl" / rel)
+    for rel in aw.TDMA_HOP_RTL:
+        src = ROOT / "hdl" / rel.relative_to("library")
+        assert (adi / rel).read_bytes() == src.read_bytes()
+        assert manifest["files"][str(rel)] == aw.sha256(src)
+    for name in (aw.TDMA_FRAGMENT, aw.TDMA_CDC_XDC):
+        assert (adi / PROJECT_REL / name).read_bytes() == (ROOT / "hdl" / name).read_bytes()
+        assert manifest["files"][str(PROJECT_REL / name)]
+    bd = (adi / PROJECT_REL / "system_bd.tcl").read_text()
+    assert bd.index("source system_bd_fabric_hop.tcl") < bd.index(aw.TDMA_FRAGMENT_SOURCE)
+    sp = (adi / PROJECT_REL / "system_project.tcl").read_text()
+    assert sp.count(aw.TDMA_CDC_ENTRY) == 1 and aw.TDMA_CDC_IMPL_ONLY in sp
+    mk = (adi / PROJECT_REL / "Makefile").read_text()
+    assert f"M_DEPS += {aw.TDMA_FRAGMENT}" in mk and f"M_DEPS += {aw.TDMA_CDC_XDC}" in mk
+    assert "M_DEPS += ../../library/tick_gpio_sync/tick_gpio_sync.v" in mk
+
+    # chip B on the real vrt49 SFP top, after Tick's chip-A edit
+    top = (adi / PORT_TOPS["sfp"]).read_text()
+    assert "assign adrv9009_gpio_00_a = tick_fhm_gpio[0];" in top
+    assert top.index("wire   [ 3:0]   tick_fhm_gpio;") < top.index(aw.CHIP_B_MARKER)
+    assert "assign gpio_i[58] = tick_fhm_gpio[1];" in top
+    import re
+
+    bufs = {}
+    for m in re.finditer(
+        r"\.DATA_WIDTH\((\d+)\)\s*\) (\w+) \(\s*\.dio_t \(\{gpio_t\[(\d+):(\d+)\]\}\),"
+        r"\s*\.dio_i \(\{gpio_o\[(\d+):(\d+)\]\}\),\s*\.dio_o \(\{gpio_i\[(\d+):(\d+)\]\}\),"
+        r"\s*\.dio_p \(\{(.*?)\}\)\);",
+        top,
+        re.S,
+    ):
+        pins = re.findall(r"^\s*(\w+)", re.sub(r"//[^\n]*", "", m[9]), re.M)
+        assert m[3] == m[5] == m[7] and m[4] == m[6] == m[8], m[2]
+        bufs[(int(m[3]), int(m[4]))] = (int(m[1]), pins)
+    hi, lo = bufs[(92, 59)], bufs[(57, 33)]
+    assert hi[0] == len(hi[1]) == 34 and lo[0] == len(lo[1]) == 25
+    # MSB first: the last entry is the lowest bit
+    assert hi[1][0] == "gpio_4_exp_n" and hi[1][-1] == "adrv9009_gpio_01_b"
+    assert lo[1][0] == "adrv9009_tx2_enable_a" and lo[1][-1] == "adrv9009_gpio_01_a"
+    every = [p for _, pins in bufs.values() for p in pins]
+    assert "adrv9009_gpio_00_b" not in every and "adrv9009_gpio_00_a" not in every
+    # idempotent
+    m2 = aw.assemble(
+        fake_tree["root"],
+        adi_hdl=adi,
+        corundum=fake_tree["corundum"],
+        check_pins=False,
+        contract_checks=False,
+        port="sfp",
+        profile="timed-dma",
+    )
+    assert m2["files"] == manifest["files"]
+    assert (adi / PORT_TOPS["sfp"]).read_text().count(aw.CHIP_B_MARKER) == 1
+
+
+def test_chip_b_patch_fails_closed_on_an_unexpected_top():
+    with pytest.raises(aw.AssembleError, match="chip-B"):
+        aw.patch_system_top_chip_b("module system_top; endmodule\n")
+
+
+def test_default_profile_manifest_records_no_build_env(fake_tree):
+    m = aw.assemble(
+        fake_tree["root"],
+        adi_hdl=fake_tree["adi"],
+        corundum=fake_tree["corundum"],
+        check_pins=False,
+        contract_checks=False,
+    )
+    assert m["profile"] == "default" and m["build_env"] == {}
+    assert not any("tick_dma_gate" in f for f in m["files"])

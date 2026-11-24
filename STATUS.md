@@ -1,5 +1,21 @@
 # STATUS — 2026-11-05 — END TO END on tron over SFP+ (default port) with real VRT timestamps: Tick→FHM→hop controller→Context→SFP+→nemo 82599 captures tagged with hop frequency; QSFP lane 0 still selectable
 
+## libdatax P3b timed-dma boot set (2026-11-24) — BUILT, JTAG set, not yet booted
+hopcap#14 on branch `p3b-timed-dma`: `build_boot_artifacts.sh --profile timed-dma` (SFP only)
+uses the adapted vrt49 control overlay without the deframer node (no `vrt49_dac_tx` with
+`VRT_DAC_TX_ENABLE=0`), skips `patch_adrv9009_tx_dma_owner.py` (stock `axi-adrv9009-tx-hpc` keeps
+the TX DMA), and gives the Tick node `adi,stream-gate-map = "rx-dma", "tx-dma", "rx-mode",
+"tx-mode", "fhm-b", "tx-start-fullmask-only"` (tick#45 driver attribute `stream_gate_map`, tick pin
+1787c33; tick `hdl/` identical to the G1 pin 3455531).
+- Inputs: G1 XSA `44cce693…ac43a` (hopcap 73793f3, routed WNS +0.096 ns); its embedded bit equals
+  G1's standalone `system_top.bit` `bdb8f07b…f94e`.
+- Built from hopcap 36a1710, ADI linux 2e89089, `--skip-boot-bin` (JTAG set: `system_top.bit`,
+  `psu_init.tcl`, `Image`, `system.dtb`, the XSA, both dtbos; `SHA256SUMS`).
+  `verify_evidence boot` OK, 12/12 DTB checks (`deframer_absent`, `tx_dma_stock`, `tick_gate_map`
+  among them). Image `24b15fc7…1e03b`, system.dtb `2ca39993…dc7c`.
+- Against a default-profile DTB from the same tree, the only semantic differences are those three.
+- Pending: boot on tron (libdatax S4, image `timed-dma`) and `iio_attr … stream_gate_map`.
+
 ## Tick PPS fallback on tron (2026-11-06) — hardware-verified
 `tick_pps_select` (#9, ac07d56) drives Tick's `pps_in`: external PPS on PMOD0 D4 when it carries a
 qualified 1 Hz pulse, otherwise Corundum's internal PTP PPS. Bitstream `ws-pps-20261106T043603Z`:
