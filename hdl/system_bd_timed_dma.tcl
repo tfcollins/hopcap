@@ -138,6 +138,11 @@ ad_ip_instance util_vector_logic tick_rx_pack_reset_or [list C_OPERATION or C_SI
 ad_connect rx_adrv9009_som_tpl_core/adc_tpl_core/adc_rst tick_rx_pack_reset_or/Op1
 ad_connect tick_rx_dma_gate/pack_reset tick_rx_pack_reset_or/Op2
 ad_connect tick_rx_pack_reset_or/Res util_som_rx_cpack/reset
+# Vivado infers the module-reference output pack_reset as an ACTIVE_LOW reset and propagates it
+# through the OR, which then mismatches cpack's ACTIVE_HIGH reset (BD 41-238, first G1 attempt).
+# Both are active high.
+hopcap_tdma_active_high tick_rx_dma_gate/pack_reset
+set_property CONFIG.POLARITY ACTIVE_HIGH [get_bd_pins tick_rx_pack_reset_or/Res]
 
 # The VRT taps must still sit on the TPL nets (G2(d)): fail at BD time, not after route.
 hopcap_tdma_same_net tick_rx_dma_gate/rx_valid_in vrt49_rx_tap/fifo_wr_en "vrt49 rx tap on TPL adc_valid_0"
