@@ -141,6 +141,9 @@ def session(tmp_path, board=None, mmio=None):
         monotonic=fs.tb.clock,
         log=lambda m: None,
         framer_io=lambda: (fs, mmio or FramerMmio()),
+        host_addrs=lambda: (
+            "4: enp7s0    inet 192.168.2.10/24 brd 192.168.2.255 scope global enp7s0\n"
+        ),
     )
     return s, board, fs
 
@@ -156,6 +159,7 @@ def test_bring_up_runs_every_stage_in_order(tmp_path):
         "radio",
         "rx_buffer",
         "link",
+        "host_receiver",
         "timebase",
     ]
     assert board.order[:5] == [
@@ -326,3 +330,13 @@ def test_module_build_script_dry_run(tmp_path):
         text=True,
     )
     assert r.returncode == 2 and "worktree" in r.stderr
+
+
+def test_host_receiver_waits_for_the_address_then_fails(tmp_path):
+    s, _b, _fs = session(tmp_path)
+    seen = iter(["", "4: enp7s0    inet 192.168.2.10/24 scope global enp7s0\n"])
+    s.host_addrs = lambda: next(seen)
+    assert s.host_receiver()["on_receiver_interface"]
+    s.host_addrs = lambda: "2: eno1    inet 10.0.0.71/24 scope global eno1\n"
+    with pytest.raises(SessionError, match="not on enp7s0"):
+        s.host_receiver(attempts=2)

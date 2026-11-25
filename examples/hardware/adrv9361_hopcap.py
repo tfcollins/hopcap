@@ -121,8 +121,18 @@ def released(header: str) -> bool:
     return any(line.strip() == "acquired: None" for line in header.splitlines())
 
 
+def resolve_paths(env) -> None:
+    """adi-lg runs the session elsewhere in the tree: hand it absolute artifact paths."""
+    for key in (*REQUIRED_ENV, "HOPCAP_PLAN"):
+        if env.get(key):
+            env[key] = str(Path(env[key]).expanduser().resolve())
+
+
 def receiver_preflight() -> dict:
-    """nemo side, read-only: enp7s0 (by MAC, e1000e) and 192.168.2.10/24 on it."""
+    """nemo side, read-only: enp7s0 (by MAC, e1000e) gates the run. Its 192.168.2.10/24 is only
+    reported here: the NIC has carrier only while lablp is powered, and NetworkManager may hold
+    the address back until then. The session checks it once the SFP link is up (stage
+    ``host_receiver``)."""
     from hopcap import link
     from hopcap.lab import preflight
 
@@ -139,9 +149,10 @@ def receiver_preflight() -> dict:
         )
     else:
         addr = {"ok": False, "reason": "no receiver interface"}
-    return preflight.summarize(
-        {"receiver": nic, "address": addr, "coordinator": preflight.coordinator_reachable()}
-    )
+    sections = {"receiver": nic, "coordinator": preflight.coordinator_reachable()}
+    out = preflight.summarize(sections)
+    out["address_report_only"] = addr
+    return out
 
 
 def stream_filtered(argv: list[str], env, log_path: Path) -> int:
@@ -177,6 +188,7 @@ def execute(args) -> int:
         if shutil.which(tool) is None:
             raise ValueError(f"{tool} not found on PATH")
     validate_environment(os.environ)
+    resolve_paths(os.environ)
     require_env(os.environ)
     evidence = Path(os.environ["HOPCAP_OUT"]).resolve()
     if evidence.exists() and any(evidence.iterdir()):

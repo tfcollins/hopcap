@@ -21,7 +21,7 @@ Stages (:class:`LablpSession`), each recorded in ``<evidence>/session.json``:
                  buffer on: the VRT tap and the time base count ``packed_fifo_wr_en`` beats,
                  which fire at fs only with all four enabled (D1 concern 1);
 7. ``link``      framer endpoint = nemo enp7s0 (192.168.2.10, 68:05:ca:19:88:8c), PCS resetdone
-                 (framer 0x78[16]);
+                 (framer 0x78[16]); then ``host_receiver``: 192.168.2.10/24 on enp7s0 here;
 8. ``timebase``  time base LOCKED on "tick", measured beats per PPS within margin of 15360000,
                  Tick epoch aligned to the framer second (:class:`hopcap.timebase.TickAligner`);
 9. ``run``       optional: :func:`hopcap.run.run_live` with a FastLock plan -> a run bundle.
@@ -215,6 +215,8 @@ class LablpSession:
     run_cmd: Callable = subprocess.run  # host commands (modinfo, dtc)
     # () -> (framer sysfs, framer MMIO); default: the on-target helper over ``shell``
     framer_io: Callable[[], tuple] | None = None
+    # () -> `ip -4 -o addr show` on this host (the receiver side)
+    host_addrs: Callable[[], str] | None = None
     sleep: Callable[[float], None] = time.sleep
     monotonic: Callable[[], float] = time.monotonic
     log: Callable[[str], None] = print
@@ -372,6 +374,32 @@ class LablpSession:
         pcs = timebase.check_pcs(mmio.read32(timebase.PCS_STATUS))
         return {"udp": readback, "pcs": pcs}
 
+    def host_receiver(self, *, attempts: int = 15, poll_s: float = 2.0) -> dict:
+        """The receiver address on nemo's NIC, checked now that the SFP has carrier (the NIC's
+        link, and with it NetworkManager's address, exists only while lablp is powered)."""
+        from hopcap.lab import preflight
+
+        rx = self.plat.receiver()
+        addrs = self.host_addrs or (
+            lambda: (
+                subprocess.run(
+                    ["ip", "-4", "-o", "addr", "show"], capture_output=True, text=True, timeout=10
+                ).stdout
+            )
+        )
+        got: dict = {}
+        for _ in range(attempts):
+            got = preflight.validate_receiver_address(
+                addrs(), rx.interface, None, nm_profile=rx.nm_profile, expected=rx.ipv4
+            )
+            if got["on_receiver_interface"]:
+                return got
+            self.sleep(poll_s)
+        raise SessionError(
+            f"{rx.ipv4} is not on {rx.interface} with the SFP link up ({got.get('note')}); "
+            f"`nmcli con up '{rx.nm_profile}'` on the receiver host"
+        )
+
     def timebase(self, sysfs, mmio, framer_cfg) -> dict:
         from hopcap import framer, timebase
 
@@ -439,6 +467,7 @@ class LablpSession:
         sysfs, helper = (self.framer_io or self._framer_io)()
         fcfg = FramerConfig.for_platform(self.plat)
         self.stage("link", lambda: self.link(sysfs, helper, fcfg))
+        self.stage("host_receiver", self.host_receiver)
         self.stage("timebase", lambda: self.timebase(sysfs, helper, fcfg))
         return self.record
 

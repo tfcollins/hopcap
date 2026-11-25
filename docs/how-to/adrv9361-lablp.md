@@ -73,7 +73,9 @@ python3 examples/hardware/adrv9361_hopcap.py --run
 
 `--run` does the following:
 
-1. Checks nemo's `enp7s0` (by MAC and driver) and its `192.168.2.10/24` address.
+1. Checks nemo's `enp7s0` (by MAC and driver). Its `192.168.2.10/24` address is only reported
+   here, because the NIC has carrier only while lablp is powered; the session's `host_receiver`
+   stage requires it once the SFP link is up. Artifact paths are made absolute.
 2. Records the place header. The rest of the listing is never kept, because it carries the power
    outlet's token.
 3. Runs `adi-lg request --part adrv9361z7035 --carrier adrv1crr-fmc --mode uri --power-down --run …`.
@@ -94,6 +96,7 @@ against `IIO_URI`. Each stage's result, or its error, is written to `session.jso
 | `radio` | 15.36 MSPS, RF bandwidth, manual RX gain, TX attenuation, TX1 DDS tone at `f_dds` (1 MHz) | an attribute is missing or the rate reads back wrong |
 | `rx_buffer` | `in_voltage0..3` and the `cf-ad9361-lpc` buffer on | not exactly those four channels enabled |
 | `link` | framer UDP endpoint = `enp7s0` (applied, read back), PCS status at framer `0x78` | `resetdone` (bit 16) is 0, or the module is absent |
+| `host_receiver` | `192.168.2.10/24` on `enp7s0` on this host, now that the SFP has carrier | the address does not appear within ~30 s |
 | `timebase` | time base on PPS source `tick`, LOCKED; measured beats per PPS; Tick epoch aligned (below) | not locked, period outside the margin, or the alignment check fails |
 | `run` | `run_live` with the plan; bundle in `$HOPCAP_OUT/run` | the run's disposition is not `ok` |
 

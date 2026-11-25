@@ -178,3 +178,18 @@ def test_platform_and_plan_must_match(tmp_path):
     cfg.platform = ZU11EG
     with pytest.raises(ValueError, match="talise-fhm"):
         run_live(cfg, comps)
+
+
+def test_adrv9361_bundle_passes_the_run_verifier(tmp_path):
+    """The launcher's last gate: verify_evidence.py run on the adrv9361 bundle."""
+    import subprocess
+
+    cfg, comps, *_ = setup(tmp_path)
+    run_live(cfg, comps)
+    root = Path(__file__).resolve().parents[2]
+    r = subprocess.run(
+        [sys.executable, str(root / "scripts/verify_evidence.py"), "run", str(tmp_path / "out")],
+        capture_output=True,
+        text=True,
+    )
+    assert r.returncode == 0, r.stdout + r.stderr

@@ -106,3 +106,19 @@ def test_receiver_check_finds_enp7s0_by_mac(tmp_path):
     addr = preflight.validate_receiver_address(raw, "enp7s0", 2, expected=rx.ipv4)
     assert addr["ok"] and addr["expected"] == "192.168.2.10/24"
     assert not preflight.validate_receiver_address(raw, "enp7s0", 2)["ok"]  # tron's 192.0.2.2
+
+
+def test_artifact_paths_are_resolved_before_adi_lg(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    env = {
+        "HOPCAP_OUT": "ev",
+        "HOPCAP_LABLP_BIN": "art/system_top.bin",
+        "HOPCAP_TICK_MODULE": "~/t.ko",
+        "HOPCAP_VRT49_MODULE": "/abs/v.ko",
+        "HOPCAP_PLAN": "p.json",
+    }
+    launcher.resolve_paths(env)
+    assert env["HOPCAP_LABLP_BIN"] == str(tmp_path / "art/system_top.bin")
+    assert env["HOPCAP_PLAN"] == str(tmp_path / "p.json")
+    assert env["HOPCAP_TICK_MODULE"] == str(Path("~/t.ko").expanduser())
+    assert env["HOPCAP_VRT49_MODULE"] == "/abs/v.ko" and env["HOPCAP_OUT"] == str(tmp_path / "ev")
