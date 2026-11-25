@@ -167,3 +167,41 @@ def test_time_base_state_decodes_the_status_word():
     assert st["lock_state"] == "locked" and st["missed"] == 3 and st["resync_sticky"] is True
     assert st["mode"] == 3 and st["seconds"] == 42
     assert st["nominal_sps"] == 245_760_000 and st["ps_per_sample_q32"] == 17476266666667
+
+
+def test_adrv9361_framer_preset(monkeypatch):
+    """D1 concern 5 / 7: the bitstream keeps vrt49's 10.0.0.x tuple and the overlay names its PPS
+    sources "tick"/"disabled"; the preset programs nemo enp7s0 and selects "tick"."""
+    from hopcap.platform import ADRV9361, ZU11EG
+
+    monkeypatch.setenv("VRT49_PHYSICAL_PORT", "qsfp")
+    c = FramerConfig.for_platform(ADRV9361)
+    assert (c.dest_ip, c.dest_mac, c.dest_port) == ("192.168.2.10", "68:05:ca:19:88:8c", 4991)
+    assert (c.source_ip, c.mtu_bytes, c.samples_per_packet) == ("192.168.2.211", 1024, 249)
+    assert c.pps_source == "tick" and c.tb_strict and c.time_base
+    z = FramerConfig.for_platform(ZU11EG)
+    assert z == FramerConfig()  # the ZU11EG default is unchanged
+    assert FramerConfig.for_platform(ADRV9361, dest_port=5000).dest_port == 5000
+
+
+def test_after_arm_hook_runs_locked_and_before_enable():
+    fs = FakeSysfs()
+    seen = []
+
+    def hook():
+        seen.append((fs.attrs["v49_enable"], time_base_state(fs)["lock_state"]))
+        return {"aligned": True}
+
+    rec = configure(
+        fs,
+        FramerConfig(),
+        now=lambda: NOW,
+        sleep=lambda _s: None,
+        monotonic=fs.tb.clock,
+        after_arm=hook,
+    )
+    assert rec["after_arm_hook"] == {"aligned": True}
+    assert seen == [("0", "locked")]
+    assert fs.attrs["v49_enable"] == "1"
+    with pytest.raises(TimeBaseError, match="after_arm"):
+        configure(FakeSysfs(), FramerConfig(time_base=False), after_arm=hook)

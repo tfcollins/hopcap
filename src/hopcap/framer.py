@@ -65,7 +65,8 @@ class FramerConfig:
     source_mac: str = "02:00:00:00:00:01"
     ttl: int = 64
     time_base: bool = True
-    pps_source: str = "corundum"  # vrt49 overlay adi,pps-source-names: "corundum", "external"
+    # vrt49 ZU11EG overlay adi,pps-source-names: "corundum", "external"; ADRV9361: "tick"
+    pps_source: str = "corundum"
     tb_strict: bool = True  # overlay adi,timebase-strict: hold data while the time base is unlocked
     tb_lock_timeout_s: float = 6.0  # a cold time base locks on its second real PPS edge
     tb_poll_s: float = 0.2
@@ -73,6 +74,26 @@ class FramerConfig:
     @property
     def samples_per_packet(self) -> int:
         return (self.mtu_bytes - 28) // 4
+
+    @classmethod
+    def for_platform(cls, plat, **overrides) -> FramerConfig:
+        """The platform's data link: its receiver (address, MAC), the board's source tuple, the
+        overlay's MTU and PPS source. ADRV9361: nemo enp7s0 192.168.2.10 from 192.168.2.211, MTU
+        1024 (249 samples), PPS source ``"tick"`` (the overlay names "tick"/"disabled"; vrt49's
+        default "corundum" is -EINVAL there)."""
+        rx = plat.receiver()
+        kw = dict(
+            mtu_bytes=plat.packet_mtu,
+            dest_ip=rx.ip,
+            dest_port=plat.dest_port,
+            dest_mac=rx.mac,
+            source_ip=plat.source_ip,
+            source_port=plat.source_port,
+            source_mac=plat.source_mac,
+            pps_source=plat.pps_source,
+        )
+        kw.update(overrides)
+        return cls(**kw)
 
 
 def configure(
@@ -82,9 +103,12 @@ def configure(
     now: Callable[[], float] = time.time,
     sleep: Callable[[float], None] = time.sleep,
     monotonic: Callable[[], float] = time.monotonic,
+    after_arm: Callable[[], dict] | None = None,
 ) -> dict:
     """Program the endpoint, arm the time base, then enable. Returns the arm record ({} when
-    ``cfg.time_base`` is off)."""
+    ``cfg.time_base`` is off). ``after_arm`` runs once the time base is LOCKED and before the
+    stream is enabled (ADRV9361: load Tick's epoch on the framer's PPS edge,
+    :class:`hopcap.timebase.TickAligner`); its result is the record's ``after_arm_hook``."""
     fs.write("v49_enable", "0")
     fs.write("v49_context_enable", "0")
     fs.write_many(
@@ -104,6 +128,10 @@ def configure(
     record = (
         arm_time_base(fs, cfg, now=now, sleep=sleep, monotonic=monotonic) if cfg.time_base else {}
     )
+    if after_arm is not None:
+        if not cfg.time_base:
+            raise TimeBaseError("after_arm needs the time base (cfg.time_base)")
+        record["after_arm_hook"] = after_arm()
     fs.write("v49_enable", "1")
     return record
 
