@@ -30,6 +30,22 @@ requires, again by net:
   * the TX gate between util_som_tx_upack and the TX TPL (read enable and all data lanes);
   * the stock axi_adrv9009_som_tx_dma -> axi_tx_fifo nets, and no vrt49_dac_tx_0;
   * the chip-B FHM assigns and the split Talise GPIO IOBUF in the top-level.
+
+``--profile adrv9361`` (ADRV9361-Z7035, hdl/system_bd_adrv9361_hop.tcl on vrt49's
+adrv9361z7035_vrt49_sfp) checks a different project and requires, by net and by the generated
+wrapper parameters:
+  * no vrt49_ad9361_hop_ctrl (HOP1) and no vrt49 tick_scheduler_0 anywhere in the netlist;
+  * axi_timed_command_scheduler_0 a *module reference* (wrapper VLNV module_ref) at
+    TIME_TICK_HZ 50000000, its gpio_out[2:0] on the tick_ctrl_in port;
+  * vrt49_fhm_hop_ctrl_0 (HOP2) fed {gpio_out[2:0], gpio_out[3]} through tick_hop_gpio_sync
+    on its own clock (not Tick's), and the seven fabric nets to axi_vrt49_framer_0;
+  * tick_pps_gen_0 (TICK_HZ 50000000) on Tick's clock driving Tick's pps_in and
+    vrt49_time_base_0's pps_in; the time base on the tap's clock and sample_valid, its
+    tuple/config buses on the framer, pps_alt_in tied off;
+  * vrt49_link_throttle FORWARD_EVERY_N 1;
+  * the top-level's CTRL_IN IOB register block and tick_clk/tick_ctrl_in wrapper ports;
+  * the post-route gate report (hdl/check_adrv9361_hop.tcl): CDC exceptions applied and the
+    three CTRL_IN registers placed in OLOGIC sites, ending in "HOPCAP_ADRV9361 ALL PASS".
 """
 
 from __future__ import annotations
@@ -60,7 +76,48 @@ REQUIRED_TOP = (
     ".tick_fhm_gpio (tick_fhm_gpio),",
     ".DATA_WIDTH(60)",
 )
-PROFILES = ("default", "timed-dma")
+PROFILES = ("default", "timed-dma", "adrv9361")
+# --- adrv9361 ---------------------------------------------------------------------------
+A9_PROJECT = "projects/adrv9361z7035_vrt49_sfp"
+A9_TOP = f"{A9_PROJECT}/system_top.v"
+A9_GATE_REPORT = "hopcap_adrv9361_post_route.rpt"
+A9_TICK_HZ = "50000000"
+REQUIRED_NETLIST_A9 = (
+    "vrt49_fhm_hop_ctrl",
+    "axi_timed_command_scheduler",
+    "axi_vrt49_framer",
+    "vrt49_time_base",
+    "tick_pps_gen",
+    "tick_hop_gpio_sync",  # module reference: its type is checked through the wrapper VLNV
+)
+FORBIDDEN_NETLIST_A9 = ("vrt49_ad9361_hop_ctrl", "tick_scheduler_0", "fastlock_select")
+REQUIRED_TOP_A9 = (
+    '(* IOB = "TRUE" *) reg [2:0] tick_ctrl_in_iob',
+    "tick_ctrl_in_iob <= tick_ctrl_in;",
+    "always @(posedge tick_clk) begin",
+    ".dio_i (tick_ctrl_in_iob),",
+    ".dio_o (gpio_i[42:40]),",
+    ".dio_p (gpio_ctl[2:0]));",
+    ".tick_clk (tick_clk),",
+    ".tick_ctrl_in (tick_ctrl_in),",
+)
+FORBIDDEN_TOP_A9 = ("ad9361_fastlock_select", "assign gpio_ctl[2:0]")
+# cell -> (wrapped module, {parameter: value}); module references must be module_ref VLNVs.
+A9_WRAPPERS = {
+    "axi_timed_command_scheduler_0": (
+        "axi_timed_command_scheduler",
+        {"TIME_TICK_HZ": A9_TICK_HZ, "GPIO_WIDTH": "4"},
+    ),
+    "vrt49_link_throttle": ("vrt49_frame_throttle", {"FORWARD_EVERY_N": "1"}),
+    "tick_pps_gen_0": ("tick_pps_gen", {"TICK_HZ": A9_TICK_HZ, "PULSE_TICKS": "5000000"}),
+    "tick_hop_event_slice": ("xlslice", {"DIN_WIDTH": "4", "DIN_FROM": "3", "DIN_TO": "3"}),
+    "tick_hop_slot_slice": ("xlslice", {"DIN_WIDTH": "4", "DIN_FROM": "2", "DIN_TO": "0"}),
+    "tick_ctrl_in_slice": ("xlslice", {"DIN_WIDTH": "4", "DIN_FROM": "2", "DIN_TO": "0"}),
+}
+A9_MODULE_REFS = {
+    "axi_timed_command_scheduler_0": "axi_timed_command_scheduler",
+    "tick_hop_gpio_sync": "tick_gpio_sync",
+}
 # timed-dma: Tick's chip-A edit plus the chip-B split (assemble_workspace.CHIP_B_EDITS).
 REQUIRED_TOP_TDMA = (
     "assign adrv9009_gpio_00_a = tick_fhm_gpio[0];",
@@ -332,6 +389,158 @@ def check_timed_dma(netlist: str) -> list[str]:
     return errors
 
 
+_ASSIGN_CONCAT = re.compile(r"^\s*assign\s+(\w+)\s*=\s*\{([^{}]*)\};", re.M)
+
+
+def concat_sources(netlist: str, insts, net: str) -> list[str] | None:
+    """MSB-first sources of an xlconcat output net: Vivado inlines xlconcat as
+    ``assign <cell>_dout = {InN, ..., In0};``; an instantiated concat is read by its pins."""
+    m = re.search(r"^module system\b.*?^endmodule", netlist, re.M | re.S)
+    for am in _ASSIGN_CONCAT.finditer(m.group(0) if m else ""):
+        if am.group(1) == net:
+            return [re.sub(r"\s+", "", s) for s in am.group(2).split(",")]
+    for kind, conns in insts.values():
+        if "xlconcat" in kind and conns.get("dout") == net:
+            ins = sorted((int(p[2:]), n) for p, n in conns.items() if re.fullmatch(r"In\d+", p))
+            return [n for _, n in reversed(ins)]
+    return None
+
+
+def check_adrv9361(netlist: str) -> list[str]:
+    """Net-level assertions for hdl/system_bd_adrv9361_hop.tcl (see the module docstring)."""
+    insts = top_instances(netlist)
+    errors: list[str] = []
+
+    def pin(inst: str, port: str) -> str | None:
+        if inst not in insts:
+            errors.append(f"instance {inst} missing from module system")
+            return None
+        net = insts[inst][1].get(port)
+        if not net or _LITERAL.fullmatch(net):
+            errors.append(f"{inst}.{port} is unconnected or tied off ({net})")
+            return None
+        return net
+
+    def same(a: tuple[str, str], b: tuple[str, str], why: str) -> None:
+        na, nb = pin(*a), pin(*b)
+        if na is not None and nb is not None and na != nb:
+            errors.append(f"{why}: {a[0]}.{a[1]} ({na}) != {b[0]}.{b[1]} ({nb})")
+
+    def differ(a: tuple[str, str], b: tuple[str, str], why: str) -> None:
+        na, nb = pin(*a), pin(*b)
+        if na is not None and na == nb:
+            errors.append(f"{why}: {a[0]}.{a[1]} and {b[0]}.{b[1]} share {na}")
+
+    sched, hop, gsync = (
+        "axi_timed_command_scheduler_0",
+        "vrt49_fhm_hop_ctrl_0",
+        "tick_hop_gpio_sync",
+    )
+    ev, sl, pg = "tick_hop_event_slice", "tick_hop_slot_slice", "tick_pps_gen_0"
+    tb, fr, tap = "vrt49_time_base_0", "axi_vrt49_framer_0", "vrt49_rx_tap"
+
+    for name, (kind, _) in insts.items():
+        if "vrt49_ad9361_hop_ctrl" in kind or name in ("tick_scheduler_0", "tick_pps_tieoff"):
+            errors.append(f"{name} ({kind}) must not be in the adrv9361 design")
+
+    # CTRL_IN[2:0] = gpio_out[2:0] on the tick_ctrl_in port (system_top.v's IOB registers)
+    same(("tick_ctrl_in_slice", "Din"), (sched, "gpio_out"), "CTRL_IN slice source")
+    if insts.get("tick_ctrl_in_slice", ("", {}))[1].get("Dout") != "tick_ctrl_in":
+        errors.append("tick_ctrl_in_slice.Dout does not drive the tick_ctrl_in port")
+
+    # HOP2 scheduler_gpio = {gpio_out[2:0], gpio_out[3]} through tick_hop_gpio_sync
+    same((ev, "Din"), (sched, "gpio_out"), "event slice source")
+    same((sl, "Din"), (sched, "gpio_out"), "slot slice source")
+    gin = pin(gsync, "gpio_async")
+    if gin is not None:
+        srcs = concat_sources(netlist, insts, gin)
+        want = [insts.get(sl, ("", {}))[1].get("Dout"), insts.get(ev, ("", {}))[1].get("Dout")]
+        if srcs is None:
+            errors.append(f"{gsync}.gpio_async ({gin}) is not an xlconcat output")
+        elif srcs != want:
+            errors.append(
+                f"{gsync}.gpio_async = {{{', '.join(srcs)}}}, expected {{{', '.join(map(str, want))}}}"
+                " (slot bits 3:1, event bit 0)"
+            )
+    same((hop, "scheduler_gpio"), (gsync, "gpio_sync"), "HOP2 GPIO through the sync")
+    same((gsync, "clk"), (hop, "clk"), "GPIO sync on the controller clock")
+    differ((hop, "clk"), (sched, "s_axi_aclk"), "HOP2 on Tick's clock")
+    differ((hop, "scheduler_gpio"), (sched, "gpio_out"), "HOP2 GPIO bypasses the sync")
+    for h_port, f_port in (
+        ("stream_enable", "fabric_sample_enable"),
+        ("fabric_samples_drained", "fabric_samples_drained"),
+        ("fabric_context_valid", "fabric_context_valid"),
+        ("fabric_context_ready", "fabric_context_ready"),
+        ("fabric_rf_frequency_q44_20", "fabric_rf_frequency_q44_20"),
+        ("fabric_hop_epoch", "fabric_hop_epoch"),
+        ("fabric_context_accepted", "fabric_context_accepted"),
+    ):
+        same((hop, h_port), (fr, f_port), "HOP2 -> framer fabric net")
+
+    # one internal 1PPS on Tick's clock for Tick and the VRT time base
+    same((pg, "pps_out"), (sched, "pps_in"), "Tick pps_in from tick_pps_gen")
+    same((pg, "pps_out"), (tb, "pps_in"), "time base pps_in from tick_pps_gen")
+    same((pg, "clk"), (sched, "s_axi_aclk"), "tick_pps_gen on Tick's clock")
+    same((tb, "divclk"), (tap, "clk"), "time base on the tap's clock")
+    same((tb, "sample_valid"), (tap, "sample_valid"), "time base counts the tap's beats")
+    alt = insts.get(tb, ("", {}))[1].get("pps_alt_in")
+    if not alt or not (_LITERAL.fullmatch(alt) or alt in _constant_drivers(insts)):
+        errors.append(f"{tb}.pps_alt_in is not tied off ({alt})")
+    for sig in ("toggle", "seconds", "count", "pps_period", "lock_state", "missed_count"):
+        same((tb, f"tuple_{sig}"), (fr, f"tb_tuple_{sig}"), "time base tuple -> framer")
+    for f_port, t_port in (
+        ("tb_seconds_req", "cfg_seconds_req"),
+        ("tb_seconds_next", "cfg_seconds_next"),
+        ("tb_seconds_immediate", "cfg_seconds_immediate"),
+        ("tb_nominal_sps", "cfg_nominal_sps"),
+        ("tb_pps_margin", "cfg_pps_margin"),
+        ("tb_pps_source", "cfg_pps_source"),
+    ):
+        same((fr, f_port), (tb, t_port), "framer config -> time base")
+    return errors
+
+
+def wrapper_text(project_dir: Path, cell: str) -> str | None:
+    hits = sorted(project_dir.glob(f"**/ip/system_{cell}_0/synth/system_{cell}_0.v"))
+    return hits[0].read_text(errors="replace") if hits else None
+
+
+def check_a9_wrappers(project_dir: Path) -> list[str]:
+    errors = []
+    for cell, (module, want) in A9_WRAPPERS.items():
+        got = wrapper_params(project_dir, cell)
+        if got is None:
+            errors.append(f"no generated wrapper (with parameters) for BD cell {cell}")
+            continue
+        kind, params = got
+        if module not in kind:
+            errors.append(f"BD cell {cell} wraps {kind}, not {module}")
+        for k, v in want.items():
+            if params.get(k) != v:
+                errors.append(f"BD cell {cell}: {k} = {params.get(k)}, expected {v}")
+    for cell, module in A9_MODULE_REFS.items():
+        text = wrapper_text(project_dir, cell)
+        if text is None:
+            errors.append(f"no generated wrapper for BD cell {cell}")
+        elif f"xilinx.com:module_ref:{module}:" not in text:
+            errors.append(f"BD cell {cell} is not a module reference to {module}")
+    return errors
+
+
+def check_a9_gate_report(project_dir: Path) -> list[str]:
+    hits = sorted(project_dir.glob(f"**/{A9_GATE_REPORT}"))
+    if not hits:
+        return [f"no {A9_GATE_REPORT} under {project_dir} (post-route gate did not run)"]
+    lines = [ln.strip() for ln in hits[0].read_text(errors="replace").splitlines() if ln.strip()]
+    errors = [f"{A9_GATE_REPORT}: {ln}" for ln in lines if " FAIL" in ln or ln.endswith("FAILED")]
+    if not lines or lines[-1] != "HOPCAP_ADRV9361 ALL PASS":
+        errors.append(f"{A9_GATE_REPORT} does not end with 'HOPCAP_ADRV9361 ALL PASS'")
+    iob = [ln for ln in lines if ln.startswith("HOPCAP_ADRV9361 PASS CTRL_IN IOB")]
+    if len(iob) != 3:
+        errors.append(f"{A9_GATE_REPORT}: {len(iob)} CTRL_IN IOB PASS lines, expected 3")
+    return errors
+
+
 _WRAPPED = re.compile(r"^\s*(\w+)\s*#\((.*?)\)\s*inst\s*\(", re.M | re.S)
 _PARAM = re.compile(r"\.(\w+)\(([^()]*)\)")
 
@@ -371,20 +580,33 @@ def check(project_dir: Path, top: Path, profile: str = "default") -> list[str]:
     if not candidates:
         return [f"no synthesized system.v under {project_dir}"]
     netlist = candidates[0].read_text(errors="replace")
-    for needle in REQUIRED_NETLIST:
+    a9 = profile == "adrv9361"
+    for needle in REQUIRED_NETLIST_A9 if a9 else REQUIRED_NETLIST:
         if needle not in netlist:
             errors.append(f"netlist {candidates[0]} lacks {needle}")
-    errors += [f"netlist {candidates[0]}: {e}" for e in check_pps(netlist)]
+    if a9:
+        for needle in FORBIDDEN_NETLIST_A9:
+            if needle in netlist:
+                errors.append(f"netlist {candidates[0]} still has {needle}")
+        errors += [f"netlist {candidates[0]}: adrv9361: {e}" for e in check_adrv9361(netlist)]
+        errors += [f"adrv9361: {e}" for e in check_a9_wrappers(project_dir)]
+        errors += [f"adrv9361: {e}" for e in check_a9_gate_report(project_dir)]
+    else:
+        errors += [f"netlist {candidates[0]}: {e}" for e in check_pps(netlist)]
     if profile == "timed-dma":
         errors += [f"netlist {candidates[0]}: timed-dma: {e}" for e in check_timed_dma(netlist)]
         errors += [f"timed-dma: {e}" for e in check_tdma_wrappers(project_dir)]
     text = top.read_text()
-    for needle in REQUIRED_TOP_TDMA if profile == "timed-dma" else REQUIRED_TOP:
+    required = {"timed-dma": REQUIRED_TOP_TDMA, "adrv9361": REQUIRED_TOP_A9}.get(
+        profile, REQUIRED_TOP
+    )
+    for needle in required:
         if needle not in text:
             errors.append(f"{top} lacks {needle!r}")
-    for needle in FORBIDDEN_TOP_TDMA if profile == "timed-dma" else ():
+    forbidden = {"timed-dma": FORBIDDEN_TOP_TDMA, "adrv9361": FORBIDDEN_TOP_A9}.get(profile, ())
+    for needle in forbidden:
         if needle in text:
-            errors.append(f"{top} still has {needle!r} (chip-B IOBUF split not applied)")
+            errors.append(f"{top} still has {needle!r}")
     return errors
 
 
@@ -394,8 +616,13 @@ def main() -> int:
     ap.add_argument("--port", choices=tuple(PORT_TOP), default="qsfp")
     ap.add_argument("--profile", choices=PROFILES, default="default")
     args = ap.parse_args()
-    project_dir = args.hdl_root / "projects/adrv9009zu11eg_vrt49_corundum"
-    top = args.hdl_root / PORT_TOP[args.port]
+    if args.profile == "adrv9361":
+        if args.port != "sfp":
+            ap.error("--profile adrv9361 is an SFP design; pass --port sfp")
+        project_dir, top = args.hdl_root / A9_PROJECT, args.hdl_root / A9_TOP
+    else:
+        project_dir = args.hdl_root / "projects/adrv9009zu11eg_vrt49_corundum"
+        top = args.hdl_root / PORT_TOP[args.port]
     errors = check(project_dir, top, args.profile)
     for e in errors:
         print(f"check_hop_netlist: {e}", file=sys.stderr)
