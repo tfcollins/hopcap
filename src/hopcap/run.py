@@ -2,8 +2,15 @@
 """Orchestrate one live run: probe, program, receive, hop, drain, associate, export.
 
 Everything the run touches arrives through :class:`Components` so the whole flow is
-testable with fakes; :func:`build_components` wires the real transports from a
-:class:`RunConfig`.
+testable with fakes; :func:`build_components_from_board` (ZU11EG) and
+:func:`build_components_adrv9361` wire the real transports.
+
+``RunConfig.platform`` selects the hop model. ZU11EG: a :class:`~hopcap.plan.HopPlan`, the Talise
+stager one hop behind, the pipeline model. ADRV9361: a :class:`~hopcap.plan.FastLockPlan`; the
+radio adapter is the :class:`~hopcap.fastlock.FastLockBank` (``prepare`` stores and recalls
+profile 0, Tick parks CTRL_IN at 0, ``enable`` sets pin select), nothing is staged, each edge
+commits its own slot, Tick's epoch is aligned to the framer's PPS second before t0 is read, and
+the measured PPS period is recorded before and after the hops.
 """
 
 from __future__ import annotations
@@ -20,7 +27,16 @@ from hopcap import stamps as stamps_mod
 from hopcap.associate import AssociationResult, associate
 from hopcap.export import write_bundle
 from hopcap.hopctrl import HopController, HopCtrlRegs
-from hopcap.plan import CompiledPlan, FhmPipelineModel, HopPlan, SlotTable, compile_plan
+from hopcap.plan import (
+    CompiledPlan,
+    FastLockPlan,
+    FhmPipelineModel,
+    HopPlan,
+    SlotTable,
+    compile_fastlock_plan,
+    compile_plan,
+)
+from hopcap.platform import ZU11EG, Platform, ticks_to_us
 from hopcap.scheduler import TickSession
 from hopcap.spool import iter_records
 
@@ -30,7 +46,7 @@ TICK_IIO_NAME = "axi-timed-command-scheduler"
 
 @dataclass
 class RunConfig:
-    plan: HopPlan
+    plan: HopPlan | FastLockPlan
     out_dir: Path
     sample_rate_hz: int = 245_760_000
     framer: framer_mod.FramerConfig = field(default_factory=framer_mod.FramerConfig)
@@ -41,6 +57,7 @@ class RunConfig:
     freq_tolerance_hz: int = 0
     hopctrl_drain_timeout_ticks: int = 0
     sequence_mode: bool = False
+    platform: Platform = ZU11EG  # FastLock platforms take the plan's sample rate
 
 
 @dataclass
@@ -51,7 +68,7 @@ class Components:
     framer: Any
     stager: Any
     receiver: Any
-    pipeline: FhmPipelineModel
+    pipeline: FhmPipelineModel | None  # None: each edge commits its own slot (FastLock)
     regs: HopCtrlRegs = field(default_factory=HopCtrlRegs.from_json)
     on_compiled: Callable[[CompiledPlan], None] | None = None
     after_edge: Callable[[bool, int], None] | None = None
@@ -60,6 +77,10 @@ class Components:
     # The clock `sleep` advances; the time-base arm check measures elapsed time with it.
     monotonic: Callable[[], float] = time.monotonic
     log: Callable[[str], None] = print
+    # After the framer time base is LOCKED, before the stream starts (ADRV9361: Tick epoch).
+    time_align: Callable[[], dict] | None = None
+    # Measured beats per PPS (framer TB_PPS_PERIOD), recorded before and after the hops.
+    pps_period: Callable[[], dict] | None = None
 
 
 def build_components_from_board(
@@ -135,8 +156,94 @@ class RunReport:
         return self.result.disposition
 
 
+def build_components_adrv9361(
+    shell,
+    *,
+    iio_uri: str,
+    out_dir: Path,
+    plat: Platform | None = None,
+    bind: str | None = None,
+    rx_cpu: int | None = None,
+    receiver: str = "c",
+) -> Components:
+    """ADRV9361-Z7035 transports: Tick over network IIO, the FastLock bank (channel/debug
+    attributes over IIO, setup registers over the board shell), HOP2 and the framer's MMIO-only
+    time-base registers through the on-target helper, nemo enp7s0 as the receiver."""
+    from hopcap import timebase
+    from hopcap.fastlock import FastLockBank, PhyRegs
+    from hopcap.platform import ADRV9361
+    from hopcap.receiver import CReceiver, PyReceiver, host_rx_counters
+    from hopcap.transport import (
+        HelperMmio,
+        HelperSysfs,
+        find_iio_device_dir,
+        iio_channel_cli_io,
+        iio_debug_cli_write,
+        iio_device_cli_io,
+    )
+
+    plat = plat or ADRV9361
+    mmio = HelperMmio(shell, base=plat.hopctrl_base)
+    mmio.ensure_uploaded()
+    framer_mmio = HelperMmio(shell, base=plat.framer_base)
+    framer = HelperSysfs(shell, device_dir=find_iio_device_dir(shell, plat.framer_iio_name))
+    tick_read, tick_write = iio_device_cli_io(iio_uri, plat.tick_iio_name)
+    writers = {
+        ch: iio_channel_cli_io(iio_uri, plat.phy_iio_name, ch, output=True)[1]
+        for ch in ("altvoltage0", "altvoltage1")
+    }
+    bank = FastLockBank(
+        write_channel=lambda ch, attr, value: writers[ch](attr, value),
+        write_debug=iio_debug_cli_write(iio_uri, plat.phy_iio_name),
+        regs=PhyRegs(shell, device=plat.phy_iio_name),
+    )
+    rx_nic = plat.receiver()
+    host, port = (bind or f"{rx_nic.ip}:{plat.dest_port}").rsplit(":", 1)
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    spool = out_dir / "datagrams.spool"
+    rx = (
+        CReceiver(bind=(host, int(port)), spool_path=spool, cpu=rx_cpu)
+        if receiver == "c"
+        else PyReceiver(bind=(host, int(port)), spool_path=spool)
+    )
+
+    def pps_period() -> dict:
+        return timebase.read_pps_period(framer_mmio)
+
+    def time_align() -> dict:
+        period = timebase.check_pps_period(**pps_period())
+        aligned = timebase.TickAligner(
+            shell, plat.tick_hz, tick_name=plat.tick_iio_name, framer_name=plat.framer_iio_name
+        ).align()
+        return {"pps_period": period, "tick_alignment": aligned}
+
+    comps = Components(
+        tick_read=tick_read,
+        tick_write=tick_write,
+        mmio=mmio,
+        framer=framer,
+        stager=bank,
+        receiver=rx,
+        pipeline=None,
+        host_counters=lambda: host_rx_counters(rx_nic.interface),
+        time_align=time_align,
+        pps_period=pps_period,
+    )
+    comps.out_dir = out_dir  # type: ignore[attr-defined]
+    comps.framer_mmio = framer_mmio  # type: ignore[attr-defined]
+    return comps
+
+
 def run_live(cfg: RunConfig, c: Components) -> RunReport:
     log = c.log
+    plat = cfg.platform
+    fastlock = isinstance(cfg.plan, FastLockPlan)
+    if fastlock != (plat.hop_mode == "fastlock"):
+        raise ValueError(
+            f"platform {plat.name} hops by {plat.hop_mode}; plan is {type(cfg.plan).__name__}"
+        )
+    sample_rate_hz = cfg.plan.sample_rate_hz if fastlock else cfg.sample_rate_hz
     out_dir = Path(cfg.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     spool_path = out_dir / "datagrams.spool"
@@ -144,8 +251,17 @@ def run_live(cfg: RunConfig, c: Components) -> RunReport:
     # 1. identity and baselines (fail closed before touching the radio)
     hc = HopController(c.mmio, c.regs)
     hc_id, hc_version = hc.identify()
-    tick = TickSession(c.tick_read, c.tick_write, lookahead_hops=cfg.lookahead_hops, sleep=c.sleep)
+    tick = TickSession(
+        c.tick_read,
+        c.tick_write,
+        lookahead_hops=cfg.lookahead_hops,
+        sleep=c.sleep,
+        bits=plat.bits,
+    )
     tick_info = tick.probe()
+    tick_hz = tick_info["time_tick_hz"]
+    if plat.tick_hz_strict:
+        plat.check_tick_hz(tick_hz)
     tick.drain_completions()
     framer_before = framer_mod.counters(c.framer)
     host_before = c.host_counters() if c.host_counters else {}
@@ -161,13 +277,21 @@ def run_live(cfg: RunConfig, c: Components) -> RunReport:
     rtt = max(1, n1 - n0)
     lookahead = max(1, min(cfg.lookahead_hops, (tick_info["queue_depth"] - 1) // 2))
     setup_calls = 2 * lookahead + 6
-    lead = max(cfg.plan.lead_ticks, setup_calls * rtt * 2)
     staging_floor = 6 * rtt  # stage write + readback + completion polls, with margin
-    plan = cfg.plan if lead == cfg.plan.lead_ticks else _replace(cfg.plan, lead_ticks=lead)
+    if fastlock:
+        fl_plan: FastLockPlan = cfg.plan
+        lead = max(fl_plan.to_hop_plan(tick_hz).lead_ticks, setup_calls * rtt * 2)
+        if lead != fl_plan.to_hop_plan(tick_hz).lead_ticks:
+            fl_plan = _replace(fl_plan, lead_us=ticks_to_us(lead, tick_hz))
+        plan = fl_plan.to_hop_plan(tick_hz)
+        slots = fl_plan.slot_table()  # by index: TX-only slots share an RX LO
+    else:
+        lead = max(cfg.plan.lead_ticks, setup_calls * rtt * 2)
+        plan = cfg.plan if lead == cfg.plan.lead_ticks else _replace(cfg.plan, lead_ticks=lead)
+        slots = SlotTable.from_plan(plan)
     log(f"transport rtt ~{rtt} ticks; lead {lead} ticks; staging floor {staging_floor} ticks")
 
     # 2. program the fabric, open the receiver, arm the radio (gate stays shut until edge 0)
-    slots = SlotTable.from_plan(plan)
     receiver_started = False
     stager_enabled = False
     edges = None
@@ -176,23 +300,33 @@ def run_live(cfg: RunConfig, c: Components) -> RunReport:
         hc.program(
             plan,
             slots,
-            tick_hz=tick_info["time_tick_hz"],
+            tick_hz=tick_hz,
             sequence_mode=cfg.sequence_mode,
             drain_timeout_ticks=cfg.hopctrl_drain_timeout_ticks,
         )
-        tb_armed = framer_mod.configure(c.framer, cfg.framer, sleep=c.sleep, monotonic=c.monotonic)
+        tb_armed = framer_mod.configure(
+            c.framer, cfg.framer, sleep=c.sleep, monotonic=c.monotonic, after_arm=c.time_align
+        )
+        pps_before = c.pps_period() if c.pps_period else None
         c.receiver.start()
         receiver_started = True
-        tick.park_trigger_low(lead_ticks=max(tick_info["time_tick_hz"] // 100, 4 * rtt))
-        c.stager.enable()
+        if fastlock:
+            c.stager.prepare(fl_plan)  # store RX+TX profiles, recall 0 (pin select still off)
+        tick.park_trigger_low(lead_ticks=max(tick_hz // 100, 4 * rtt))
+        c.stager.enable()  # ZU11EG: FHM GPIO mode; ADRV9361: profile pin select on
         stager_enabled = True
         hc.require_idle()
 
         # 3. compile against the live clock only now, so the lead is not eaten by setup
         t0 = tick.now()
-        compiled = compile_plan(
-            plan, t0_ticks=t0, tick_hz=tick_info["time_tick_hz"], min_period_ticks=staging_floor
-        )
+        if fastlock:
+            compiled = compile_fastlock_plan(
+                fl_plan, t0_ticks=t0, tick_hz=tick_hz, min_period_ticks=staging_floor
+            )
+        else:
+            compiled = compile_plan(
+                plan, t0_ticks=t0, tick_hz=tick_hz, min_period_ticks=staging_floor
+            )
         if c.on_compiled:
             c.on_compiled(compiled)
         log(f"plan {plan.name}: {len(compiled.edges)} edges from t0={t0}, {len(slots)} slots")
@@ -212,7 +346,7 @@ def run_live(cfg: RunConfig, c: Components) -> RunReport:
             try:
                 c.stager.disable()
             except Exception as exc:
-                log(f"warning: FHM disable failed: {exc}")
+                log(f"warning: radio hop-input disable failed: {exc}")
         if edges is None:
             # failure path: leave the board quiet and the port free
             for step in (
@@ -231,6 +365,7 @@ def run_live(cfg: RunConfig, c: Components) -> RunReport:
     framer_mod.disable(c.framer)
     framer_after = framer_mod.counters(c.framer)
     tb_after = framer_mod.time_base_state(c.framer) if cfg.framer.time_base else None
+    pps_after = c.pps_period() if c.pps_period else None
     rx_summary = c.receiver.stop()
     hc.disable()
     host_after = c.host_counters() if c.host_counters else {}
@@ -246,7 +381,7 @@ def run_live(cfg: RunConfig, c: Components) -> RunReport:
         records,
         compiled,
         edges,
-        sample_rate_hz=cfg.sample_rate_hz,
+        sample_rate_hz=sample_rate_hz,
         samples_per_packet=cfg.framer.samples_per_packet,
         epoch_base=hc_before.epoch,
         expected_peer=cfg.expected_peer,
@@ -255,7 +390,7 @@ def run_live(cfg: RunConfig, c: Components) -> RunReport:
     q32 = (
         tb_armed["after_arm"]["ps_per_sample_q32"]
         if tb_armed
-        else stamps_mod.q32_for_rate(cfg.sample_rate_hz)
+        else stamps_mod.q32_for_rate(sample_rate_hz)
     )
     counters = {
         "framer_before": framer_before,
@@ -266,6 +401,7 @@ def run_live(cfg: RunConfig, c: Components) -> RunReport:
         "receiver": rx_summary,
     }
     extra = {
+        "platform": plat.name,
         "tick": {
             **tick_info,
             "t0_ticks": t0,
@@ -291,14 +427,22 @@ def run_live(cfg: RunConfig, c: Components) -> RunReport:
             "hop_spacing_residual_ps": stamps_mod.hop_spacing_residuals(
                 result.hops, tick_hz=compiled.tick_hz
             ),
+            "pps_period_before": pps_before,
+            "pps_period_after": pps_after,
         },
     }
+    if fastlock:
+        extra["fastlock"] = {
+            "plan": compiled.fastlock.as_dict(),
+            "bank": getattr(c.stager, "record", None),
+            "controller_hz": plat.controller_hz,
+        }
     write_bundle(
         out_dir,
         compiled=compiled,
         result=result,
         records=records,
-        sample_rate_hz=cfg.sample_rate_hz,
+        sample_rate_hz=sample_rate_hz,
         provenance=cfg.provenance,
         counters=counters,
     )

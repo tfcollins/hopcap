@@ -57,6 +57,157 @@ class SshShell:
         return proc.stdout
 
 
+class PasswordSshShell:
+    """ssh to a board whose root login is password-only (stock Kuiper on lablp: root/analog).
+
+    One master connection authenticates once through ``SSH_ASKPASS`` (``SSH_ASKPASS_REQUIRE=force``,
+    OpenSSH >= 8.4; the password comes from the environment, never the command line) and every
+    later call reuses its control socket, so a call costs one channel, not one handshake. Host
+    keys are pinned in a run-local known_hosts with ``accept-new``: DHCP leases on the lab LAN
+    move between boards, so a global file would collide, while a key change within the run still
+    fails. ``runner`` is injectable for tests."""
+
+    def __init__(
+        self,
+        target: str,
+        *,
+        work_dir: Path,
+        password_env: str = "HOPCAP_TARGET_PASSWORD",
+        default_password: str | None = "analog",
+        runner: Callable[..., subprocess.CompletedProcess] | None = None,
+        persist_s: int = 1800,
+    ):
+        import os
+
+        self.target = target
+        self.work_dir = Path(work_dir)
+        self.work_dir.mkdir(parents=True, exist_ok=True)
+        self.socket = self.work_dir / "ssh-control.sock"
+        self.known_hosts = self.work_dir / "target_known_hosts"
+        self.askpass = self.work_dir / "askpass.sh"
+        self.password_env = password_env
+        self.password = os.environ.get(password_env) or default_password
+        self.persist_s = persist_s
+        self._run = runner or subprocess.run
+        self.started = False
+
+    def options(self) -> list[str]:
+        return [
+            "-o",
+            f"ControlPath={self.socket}",
+            "-o",
+            "StrictHostKeyChecking=accept-new",
+            "-o",
+            f"UserKnownHostsFile={self.known_hosts}",
+            "-o",
+            "PreferredAuthentications=password,keyboard-interactive",
+            "-o",
+            "PubkeyAuthentication=no",
+            "-o",
+            "ConnectTimeout=10",
+        ]
+
+    def start(self) -> None:
+        import os
+
+        if self.started:
+            return
+        if not self.password:
+            raise ShellError(f"{self.password_env} is not set")
+        self.known_hosts.touch()
+        self.askpass.write_text(f"#!/bin/sh\nprintf '%s\\n' \"${self.password_env}\"\n")
+        self.askpass.chmod(0o700)
+        env = dict(
+            os.environ,
+            SSH_ASKPASS=str(self.askpass),
+            SSH_ASKPASS_REQUIRE="force",
+            DISPLAY=os.environ.get("DISPLAY", "none"),
+        )
+        env[self.password_env] = self.password
+        proc = self._run(
+            [
+                "ssh",
+                *self.options(),
+                "-o",
+                "ControlMaster=yes",
+                "-o",
+                f"ControlPersist={self.persist_s}",
+                "-f",
+                "-N",
+                self.target,
+            ],
+            text=True,
+            capture_output=True,
+            timeout=60,
+            env=env,
+            stdin=subprocess.DEVNULL,
+        )
+        if proc.returncode != 0:
+            raise ShellError(f"ssh master to {self.target} failed: {proc.stderr.strip()}")
+        self.started = True
+
+    def _ssh(self, cmd: str, *, timeout_s: float, stdin=None) -> subprocess.CompletedProcess:
+        self.start()
+        return self._run(
+            [
+                "ssh",
+                *self.options(),
+                "-o",
+                "ControlMaster=no",
+                "-o",
+                "BatchMode=yes",
+                self.target,
+                cmd,
+            ],
+            text=stdin is None,
+            capture_output=True,
+            timeout=timeout_s,
+            stdin=stdin if stdin is not None else subprocess.DEVNULL,
+        )
+
+    def run(self, cmd: str, *, timeout_s: float = 15.0) -> str:
+        proc = self._ssh(cmd, timeout_s=timeout_s)
+        if proc.returncode != 0:
+            err = (
+                proc.stderr
+                if isinstance(proc.stderr, str)
+                else proc.stderr.decode(errors="replace")
+            )
+            raise ShellError(f"ssh {self.target} failed ({proc.returncode}): {err.strip()}")
+        return proc.stdout if isinstance(proc.stdout, str) else proc.stdout.decode()
+
+    def push(self, local: Path, remote: str, *, timeout_s: float = 300.0) -> str:
+        """Stream a file over the master channel (a 13 MB bitstream is one ``cat``, not 50k
+        printf calls), then check its sha256 on the board before moving it into place."""
+        import hashlib
+
+        data = Path(local).read_bytes()
+        digest = hashlib.sha256(data).hexdigest()
+        staging = remote + ".part"
+        self.run(f"mkdir -p {shlex.quote(str(Path(remote).parent))}")
+        with Path(local).open("rb") as fp:
+            proc = self._ssh(f"cat > {shlex.quote(staging)}", timeout_s=timeout_s, stdin=fp)
+        if proc.returncode != 0:
+            raise ShellError(f"push {local} -> {remote} failed ({proc.returncode})")
+        self.run(
+            f"echo {shlex.quote(f'{digest}  {staging}')} | sha256sum -c - >/dev/null && "
+            f"mv {shlex.quote(staging)} {shlex.quote(remote)}"
+        )
+        return digest
+
+    def close(self) -> None:
+        if not self.started:
+            return
+        self._run(
+            ["ssh", *self.options(), "-O", "exit", self.target],
+            text=True,
+            capture_output=True,
+            timeout=15,
+            stdin=subprocess.DEVNULL,
+        )
+        self.started = False
+
+
 def upload_file(shell: Shell, local: Path, remote: str, *, chunk: int = 256) -> None:
     """base64 over the shell in <=256-char chunks with a sha256 check, so it survives a serial
     console's 4095-byte line discipline as well as ssh (vrt49 _corundum_upload_file pattern)."""
@@ -272,6 +423,27 @@ def iio_device_cli_io(
         run(["iio_attr", "-u", uri, "-d", device, name, value])
 
     return read_attr, write_attr
+
+
+def iio_debug_cli_write(
+    uri: str,
+    device: str,
+    *,
+    runner: Callable[[list[str]], str] | None = None,
+    timeout_s: float = 10.0,
+) -> Callable[[str, str], None]:
+    """Debug-attribute writer (``iio_attr -D``), e.g. ``adi,rx-fastlock-pincontrol-enable``."""
+
+    def default_runner(args: list[str]) -> str:
+        proc = subprocess.run(args, text=True, capture_output=True, timeout=timeout_s, check=True)
+        return proc.stdout
+
+    run = runner or default_runner
+
+    def write_attr(name: str, value: str) -> None:
+        run(["iio_attr", "-u", uri, "-D", device, name, value])
+
+    return write_attr
 
 
 def find_fhm_channel_cli(uri: str, device: str = "adrv9009-phy", *, runner=None) -> str:

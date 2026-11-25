@@ -113,3 +113,57 @@ def test_decode_rebuilds_bundle_from_spool_and_edges(tmp_path):
     assert man["disposition"] == "ok" and len(man["hops"]) == 3
     r = cli("verify", "run", str(tmp_path / "out"))
     assert r.returncode == 0, r.stdout + r.stderr
+
+
+def test_run_dry_run_adrv9361_takes_everything_from_the_platform(tmp_path):
+    r = cli(
+        "run",
+        "--plan",
+        str(ROOT / "examples/plans/adrv9361-loopback-3slot.json"),
+        "--iio-uri",
+        "ip:10.9.9.9",
+        "--target",
+        "root@10.9.9.9",
+        "--out",
+        str(tmp_path / "o"),
+        "--settle-us",
+        "30",
+        "--dry-run",
+    )
+    assert r.returncode == 0, r.stderr
+    d = json.loads(r.stdout)
+    assert d["platform"] == "adrv9361" and d["tick_hz"] == 50_000_000
+    assert d["tick_ticks"]["settle_ticks"] == 1_500 and d["controller_cycles"]["settle"] == 3_000
+    assert d["endpoints"]["hopctrl"]["base"] == "0x44ab0000"
+    assert d["endpoints"]["radio"] == {
+        "uri": "ip:10.9.9.9",
+        "device": "ad9361-phy",
+        "hop": "fastlock",
+    }
+    assert d["endpoints"]["receiver"]["bind"] == "192.168.2.10:4991"
+    assert d["endpoints"]["receiver"]["interface"] == "enp7s0"
+    f = d["framer"]
+    assert (f["dest_mac"], f["source_ip"], f["mtu_bytes"], f["pps_source"]) == (
+        "68:05:ca:19:88:8c",
+        "192.168.2.211",
+        1024,
+        "tick",
+    )
+
+
+def test_run_rejects_a_plan_for_the_other_platform(tmp_path):
+    r = cli(
+        "run",
+        "--plan",
+        str(PLAN),
+        "--platform",
+        "adrv9361",
+        "--iio-uri",
+        "ip:10.9.9.9",
+        "--target",
+        "root@10.9.9.9",
+        "--out",
+        str(tmp_path / "o"),
+        "--dry-run",
+    )
+    assert r.returncode == 2 and "Talise FHM plan" in r.stderr

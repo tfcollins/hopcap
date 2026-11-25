@@ -195,10 +195,12 @@ class FastLockBank:
         return {f"0x{r:X}": decode_setup(self.regs.read(r)) for r in SETUP_REGS}
 
     # -- the radio adapter run_live drives ---------------------------------------------------
-    def prepare(self, compiled) -> None:
-        if compiled.fastlock is None:
+    def prepare(self, plan) -> None:
+        """Store the plan's slots and recall profile 0 (before Tick parks CTRL_IN at 0)."""
+        slots = getattr(plan, "slots", None)
+        if not slots or not isinstance(slots[0], FastLockSlot):
             raise FastLockError("FastLockBank needs a FastLock (ADRV9361) plan")
-        self.load(compiled.fastlock.slots)
+        self.load(slots)
 
     def enable(self) -> None:
         self.enable_pin_select()

@@ -164,11 +164,13 @@ def test_guards():
         b.stage(2_400 * MHZ)
 
 
-def test_prepare_takes_the_compiled_fastlock_slots():
+def test_prepare_takes_the_plan_slots():
     p = FastLockPlan(slots=SLOTS, hops=(1, 2, 0), period_us=1_250_000, settle_us=0, capture_us=10)
     b, chip = bank()
-    b.prepare(compile_fastlock_plan(p, t0_ticks=0, tick_hz=50_000_000))
+    b.prepare(p)
     assert b.loaded and len(chip.profiles) == 6
+    with pytest.raises(FastLockError, match="FastLock"):
+        bank()[0].prepare(compile_fastlock_plan(p, t0_ticks=0, tick_hz=50_000_000).plan)
 
 
 def test_board_snippets_are_valid_posix_sh():

@@ -133,6 +133,9 @@ class Platform:
     source_mac: str
     dest_port: int
     max_slots: int = 8
+    # Fail a run whose Tick is not at tick_hz. Off on the ZU11EG: the same board also runs the
+    # timed-dma image with Tick at 122.88 MHz, and every ZU11EG conversion uses the probed rate.
+    tick_hz_strict: bool = True
     tick_iio_name: str = "axi-timed-command-scheduler"
     framer_iio_name: str = "vrt49_framer"  # iio-vrt49-buffer.c indio_dev->name
     receiver_port: str | None = None  # fixed receiver; None = VRT49_PHYSICAL_PORT (hopcap.link)
@@ -175,6 +178,7 @@ ZU11EG = Platform(
     source_port=4991,
     source_mac="02:00:00:00:00:01",
     dest_port=4991,
+    tick_hz_strict=False,
 )
 
 ADRV9361 = Platform(
