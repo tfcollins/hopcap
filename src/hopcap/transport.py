@@ -270,6 +270,11 @@ class HelperMmio:
         self.shell, self.base, self.helper_path, self.span = shell, base, helper_path, span
 
     def ensure_uploaded(self) -> None:
+        push = getattr(self.shell, "push", None)
+        if push is not None:  # one streamed, hash-checked copy (PasswordSshShell)
+            push(HELPER_SRC, self.helper_path)
+            self.shell.run(f"chmod +x {shlex.quote(self.helper_path)}")
+            return
         upload_file(self.shell, HELPER_SRC, self.helper_path)
 
     @contextmanager

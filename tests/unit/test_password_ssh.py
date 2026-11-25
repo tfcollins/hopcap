@@ -70,3 +70,15 @@ def test_push_streams_then_checks_sha256(tmp_path):
     assert cmds[1] == "cat > /tmp/hopcap/system_top.bin.part"
     assert f"{digest}  /tmp/hopcap/system_top.bin.part" in cmds[2] and "sha256sum -c" in cmds[2]
     assert cmds[2].endswith("mv /tmp/hopcap/system_top.bin.part /tmp/hopcap/system_top.bin")
+
+
+def test_helper_upload_uses_push_when_the_shell_streams(tmp_path):
+    from hopcap.transport import HELPER_SRC, HelperMmio
+
+    r = Runner()
+    sh = PasswordSshShell("root@x", work_dir=tmp_path, runner=r)
+    HelperMmio(sh, base=0x44A80000).ensure_uploaded()
+    assert r.pushed == HELPER_SRC.read_bytes()
+    cmds = [c[0][-1] for c in r.calls if "ControlMaster=no" in c[0]]
+    assert cmds[-1] == "chmod +x /tmp/hopcap_target.py"
+    assert not any(c.startswith("printf %s") for c in cmds)
