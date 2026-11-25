@@ -143,7 +143,7 @@ def test_program_closes_gate_while_idle_and_enabled():
     regs = HopCtrlRegs.from_json()
     m = FakeMmio(regs)
     p = _plan()
-    HopController(m, regs).program(p, SlotTable.from_plan(p))
+    HopController(m, regs).program(p, SlotTable.from_plan(p), tick_hz=100_000_000)
     assert m.enabled and m.idle_open is False
     assert HopController(m, regs).status().gate_open is False
 

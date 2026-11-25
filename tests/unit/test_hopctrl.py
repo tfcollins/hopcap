@@ -55,7 +55,7 @@ def test_program_writes_slots_settle_capture_then_enables(regs):
         capture_ticks=67_890,
     )
     slots = SlotTable.from_plan(plan)
-    hc.program(plan, slots)
+    hc.program(plan, slots, tick_hz=100_000_000)
     # every slot word is written lo then hi, unused slots zeroed
     words = slots.words()
     for i in range(8):

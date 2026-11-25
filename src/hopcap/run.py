@@ -176,6 +176,7 @@ def run_live(cfg: RunConfig, c: Components) -> RunReport:
         hc.program(
             plan,
             slots,
+            tick_hz=tick_info["time_tick_hz"],
             sequence_mode=cfg.sequence_mode,
             drain_timeout_ticks=cfg.hopctrl_drain_timeout_ticks,
         )

@@ -20,9 +20,13 @@ from tick.ffh import descriptor_csv
 
 from hopcap.descriptors import descriptors_for_edge
 from hopcap.plan import HopPlan, PlanError, compile_plan
+from hopcap.platform import us_to_ticks
 
-DEFAULT_TICK_HZ = 100_000_000
+DEFAULT_TICK_HZ = 100_000_000  # the ZU11EG Tick; `--platform adrv9361` uses 50 MHz
 DEFAULT_FS_HZ = 245_760_000
+DEFAULT_PULSE_US = 10_000  # 10 ms: the width the Tick demo validated
+DEFAULT_LEAD_US = 50_000
+DEFAULT_CONTEXT_MARGIN_US = 100
 
 
 def load_plan(path: Path, *, tick_hz: int = DEFAULT_TICK_HZ) -> tuple[HopPlan, int]:
@@ -50,8 +54,14 @@ def load_plan(path: Path, *, tick_hz: int = DEFAULT_TICK_HZ) -> tuple[HopPlan, i
         period_ticks=ticks("period_us", "period_ticks"),
         settle_ticks=ticks("settle_us", "settle_ticks"),
         capture_ticks=capture,
-        pulse_ticks=ticks("pulse_us", "pulse_ticks", HopPlan.pulse_ticks),
-        lead_ticks=ticks("lead_us", "lead_ticks", HopPlan.lead_ticks),
+        # Defaults are durations, not tick counts: HopPlan's tick defaults assume 100 MHz.
+        pulse_ticks=ticks("pulse_us", "pulse_ticks", us_to_ticks(DEFAULT_PULSE_US, tick_hz)),
+        lead_ticks=ticks("lead_us", "lead_ticks", us_to_ticks(DEFAULT_LEAD_US, tick_hz)),
+        context_margin_ticks=ticks(
+            "context_margin_us",
+            "context_margin_ticks",
+            us_to_ticks(DEFAULT_CONTEXT_MARGIN_US, tick_hz),
+        ),
         name=str(raw.get("name", Path(path).stem)),
     )
     if "init_frequency_hz" in raw:

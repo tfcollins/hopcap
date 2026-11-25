@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Protocol
 
 from hopcap.plan import HopPlan, SlotTable
+from hopcap.platform import controller_cycles
 
 REGMAP_PATH = Path(__file__).resolve().parents[2] / "hdl" / "hopctrl_regmap.json"
 
@@ -52,6 +53,7 @@ class HopCtrlRegs:
         self.id_ascii = data["id_ascii"]
         self.version_word = int(data["version_word"], 16)
         self.slot_count = int(data["slot_count"])
+        self.clock_hz = int(data["clock_hz"])
         self.states: dict[str, int] = dict(data["states"])
         self.state_names = {v: k for k, v in self.states.items()}
         self.offsets: dict[str, int] = {r["name"]: int(r["offset"], 16) for r in data["registers"]}
@@ -113,24 +115,37 @@ class HopController:
         plan: HopPlan,
         slots: SlotTable,
         *,
+        tick_hz: int,
         sequence_mode: bool = False,
         drain_timeout_ticks: int = 0,
         idle_open: bool = False,
     ) -> None:
-        """Write slot table, settle, capture, then enable with stickies cleared."""
+        """Write slot table, settle, capture, then enable with stickies cleared.
+
+        ``plan`` durations and ``drain_timeout_ticks`` are Tick ticks at ``tick_hz``; the
+        controller counts its own clock (regmap ``clock_hz``), so each is converted with
+        :func:`hopcap.platform.controller_cycles` (the identity at 100 MHz, x2 for the
+        ADRV9361's 50 MHz Tick)."""
+        cycles = self.controller_cycles
         self.m.write32(self.r.CTRL_STATUS, CTRL_IDLE_OPEN)  # disable while reprogramming
         for i, word in enumerate(slots.words()):
             self.m.write32(self.r.slot_lo(i), word & 0xFFFFFFFF)
             self.m.write32(self.r.slot_hi(i), (word >> 32) & 0xFFFFFFFF)
-        self.m.write32(self.r.SETTLE_TICKS, plan.settle_ticks)
-        self.m.write32(self.r.CAPTURE_TICKS, plan.capture_ticks)
-        self.m.write32(self.r.DRAIN_TIMEOUT_TICKS, drain_timeout_ticks)
+        self.m.write32(self.r.SETTLE_TICKS, cycles(plan.settle_ticks, tick_hz))
+        self.m.write32(self.r.CAPTURE_TICKS, cycles(plan.capture_ticks, tick_hz))
+        self.m.write32(self.r.DRAIN_TIMEOUT_TICKS, cycles(drain_timeout_ticks, tick_hz))
         self.m.write32(self.r.SEQ_SLOT_COUNT, max(1, len(slots)))
         self.m.write32(self.r.SEQ_INDEX, 0)
         ctrl = CTRL_ENABLE | CTRL_W1C_CLEAR | (CTRL_IDLE_OPEN if idle_open else 0)
         if sequence_mode:
             ctrl |= CTRL_SLOT_SOURCE_SEQ
         self.m.write32(self.r.CTRL_STATUS, ctrl)
+
+    def controller_cycles(self, ticks: int, tick_hz: int) -> int:
+        out = controller_cycles(ticks, tick_hz=tick_hz, controller_hz=self.r.clock_hz)
+        if out > 0xFFFFFFFF:
+            raise HopCtrlError(f"{ticks} ticks at {tick_hz} Hz = {out} cycles: exceeds 32 bits")
+        return out
 
     def disable(self) -> None:
         """Leave the gate forced open (gapless, pre-hopcap behaviour)."""

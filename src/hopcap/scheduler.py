@@ -1,6 +1,10 @@
 # SPDX-License-Identifier: MIT
 """Drive Tick through a compiled plan: bounded lookahead submission, one-entry completion
-window discipline, Talise staging one hop ahead, PLL readback after every edge."""
+window discipline, Talise staging one hop ahead, PLL readback after every edge.
+
+On the ADRV9361 (FastLock pin select) nothing is staged: the compiled edges carry no
+``stage_before_hz``, the pipeline model is ``None`` (each edge commits its own slot) and the
+radio adapter's readback is ``None`` (the driver's cached LO is not evidence of a pin recall)."""
 
 from __future__ import annotations
 
@@ -11,8 +15,9 @@ from tick import Capability, CommandDescriptor, CommandID, Flag, Status, TargetF
 from tick.ffh import descriptor_csv, wait_for_completion
 
 from hopcap.associate import EdgeResult
-from hopcap.descriptors import RISE_SEQ_BASE, descriptors_for_edge, gpio_value
+from hopcap.descriptors import RISE_SEQ_BASE, descriptors_for_edge
 from hopcap.plan import CompiledPlan, FhmPipelineModel
+from hopcap.platform import ZU11EG_BITS, GpioBitMap
 
 ReadAttr = Callable[[str], int]
 WriteAttr = Callable[[str, str], None]
@@ -32,7 +37,9 @@ class TickSession:
         poll_s: float = 0.002,
         sleep: Callable[[float], None] = time.sleep,
         completion_timeout_s: float = 5.0,
+        bits: GpioBitMap = ZU11EG_BITS,
     ):
+        self.bits = bits
         self.read = read_attr
         self.write = write_attr
         self.lookahead = lookahead_hops
@@ -69,14 +76,17 @@ class TickSession:
         self.write("command_descriptor", descriptor_csv(d))
 
     def park_trigger_low(self, *, lead_ticks: int, seq: int = 0x0F00) -> None:
-        """Drive gpio bit 0 low once before FHM is enabled (demo step)."""
+        """Drive all four gpio bits low once before the radio's hop input is enabled: the FHM
+        trigger low (ZU11EG demo step), or event low and CTRL_IN code 0 = FastLock profile 0
+        (ADRV9361, before Profile Pin Select is set)."""
+        mask, value = self.bits.park()
         d = CommandDescriptor(
             command_id=CommandID.GPIO_WRITE,
             target_id=TargetFamily.GPIO,
             timestamp_ticks=self.now() + lead_ticks,
             flags=Flag.REPORT_COMPLETION,
             sequence_id=seq,
-            args=(0xF, gpio_value(0, False), 0, 0),
+            args=(mask, value, 0, 0),
         )
         self.submit(d)
         wait_for_completion(
@@ -93,7 +103,7 @@ class TickSession:
         self,
         compiled: CompiledPlan,
         stager,
-        pipeline: FhmPipelineModel,
+        pipeline: FhmPipelineModel | None,
         *,
         after_edge: Callable[[bool, int], None] | None = None,
         stage_guard_ticks: int = 0,
@@ -108,14 +118,15 @@ class TickSession:
         def submit_up_to(k: int) -> None:
             nonlocal submitted
             while submitted < len(edges) and submitted <= k:
-                for d in descriptors_for_edge(edges[submitted]):
+                for d in descriptors_for_edge(edges[submitted], self.bits):
                     self.submit(d)
                 submitted += 1
 
         # Stage frequencies[0] before edge 0 fires, then keep one hop ahead.
         if edges[0].stage_before_hz is not None:
             stager.stage(edges[0].stage_before_hz)
-            pipeline.stage(edges[0].stage_before_hz)
+            if pipeline is not None:
+                pipeline.stage(edges[0].stage_before_hz)
         submit_up_to(lookahead - 1)
         for k, e in enumerate(edges):
             seq = RISE_SEQ_BASE + e.index
@@ -128,13 +139,16 @@ class TickSession:
                 sleep=self.sleep,
             )
             executed_ok = status in (Status.EXECUTED, Status.LATE_EXECUTED)
-            expected = pipeline.on_edge(executed=executed_ok)
+            expected = (
+                pipeline.on_edge(executed=executed_ok) if pipeline is not None else e.commits_hz
+            )
             host_mono = time.monotonic_ns()
             # Stage what the *next* edge needs before it fires.
             stage_late = False
             if k + 1 < len(edges) and edges[k + 1].stage_before_hz is not None:
                 stager.stage(edges[k + 1].stage_before_hz)
-                pipeline.stage(edges[k + 1].stage_before_hz)
+                if pipeline is not None:
+                    pipeline.stage(edges[k + 1].stage_before_hz)
                 if self.now() > edges[k + 1].rise_ticks - stage_guard_ticks:
                     stage_late = True
             if after_edge is not None:
