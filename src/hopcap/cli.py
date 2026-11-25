@@ -18,8 +18,16 @@ from pathlib import Path
 
 from tick.ffh import descriptor_csv
 
+from hopcap import platform as platform_mod
 from hopcap.descriptors import descriptors_for_edge
-from hopcap.plan import HopPlan, PlanError, compile_plan
+from hopcap.plan import (
+    FastLockPlan,
+    HopPlan,
+    PlanError,
+    compile_fastlock_plan,
+    compile_plan,
+    is_fastlock_plan,
+)
 from hopcap.platform import us_to_ticks
 
 DEFAULT_TICK_HZ = 100_000_000  # the ZU11EG Tick; `--platform adrv9361` uses 50 MHz
@@ -69,6 +77,97 @@ def load_plan(path: Path, *, tick_hz: int = DEFAULT_TICK_HZ) -> tuple[HopPlan, i
     if "band_hz" in raw:
         kw["band_hz"] = (int(raw["band_hz"][0]), int(raw["band_hz"][1]))
     return HopPlan(**kw), fs
+
+
+def load_fastlock_plan(path: Path) -> FastLockPlan:
+    """An ADRV9361 plan (``slots`` + ``hops``, durations in µs), validated."""
+    raw = json.loads(Path(path).read_text())
+    if not is_fastlock_plan(raw):
+        raise PlanError(f"{path}: not a FastLock plan (needs slots and hops)")
+    plan = FastLockPlan.from_dict(raw, name=Path(path).stem)
+    plan.validate()
+    return plan
+
+
+def plan_platform(path: Path, requested: str | None) -> platform_mod.Platform:
+    """The platform a plan file is for: ``--platform``, else the file's ``platform`` key, else
+    the ZU11EG. A FastLock plan only runs on a FastLock platform and vice versa."""
+    raw = json.loads(Path(path).read_text())
+    named = raw.get("platform")
+    if requested and named and requested != named:
+        raise PlanError(f"{path} is a {named} plan, not {requested}")
+    plat = platform_mod.get(requested or named)
+    if is_fastlock_plan(raw) != (plat.hop_mode == "fastlock"):
+        kind = "FastLock" if is_fastlock_plan(raw) else "Talise FHM"
+        raise PlanError(f"{path} is a {kind} plan; platform {plat.name} hops by {plat.hop_mode}")
+    return plat
+
+
+def dry_run_fastlock(
+    plan: FastLockPlan, *, t0_ticks: int, plat: platform_mod.Platform, tick_hz: int
+) -> dict:
+    c = compile_fastlock_plan(plan, t0_ticks=t0_ticks, tick_hz=tick_hz)
+    hp = c.plan
+    kinds = plan.hop_kinds()
+    offsets = plan.offsets_hz()
+    seq = plan.sequence()
+    edges = []
+    for e in c.edges:
+        rise, fall = descriptors_for_edge(e, plat.bits)
+        edges.append(
+            {
+                **asdict(e),
+                "kind": kinds[e.index],
+                "rx_lo_hz": plan.slots[e.slot].rx_lo_hz,
+                "tx_lo_hz": plan.slots[e.slot].tx_lo_hz,
+                "tone_from_hz": offsets[seq[e.index]],
+                "tone_to_hz": offsets[e.slot],
+                "rise_gpio": {"mask": rise.args[0], "value": rise.args[1]},
+                "fall_gpio": {"mask": fall.args[0], "value": fall.args[1]},
+                "rise_sequence_id": rise.sequence_id,
+                "fall_sequence_id": fall.sequence_id,
+                "rise_descriptor_hex": descriptor_csv(rise),
+                "fall_descriptor_hex": descriptor_csv(fall),
+                "capture_open_ticks": e.rise_ticks + hp.settle_ticks,
+                "capture_close_ticks": e.rise_ticks + hp.settle_ticks + hp.capture_ticks,
+            }
+        )
+    busy = hp.settle_ticks + hp.capture_ticks + hp.pulse_ticks + hp.context_margin_ticks
+    cyc = platform_mod.controller_cycles
+    return {
+        "schema": "hopcap-dry-run-fastlock/v1",
+        "platform": plat.name,
+        "plan": plan.as_dict(),
+        "tick_hz": tick_hz,
+        "controller_hz": plat.controller_hz,
+        "t0_ticks": t0_ticks,
+        "sample_rate_hz": plan.sample_rate_hz,
+        "capture_samples": hp.capture_samples(sample_rate_hz=plan.sample_rate_hz, tick_hz=tick_hz),
+        "tick_ticks": {
+            k: getattr(hp, k)
+            for k in ("period_ticks", "settle_ticks", "capture_ticks", "pulse_ticks", "lead_ticks")
+        },
+        "controller_cycles": {
+            "settle": cyc(hp.settle_ticks, tick_hz=tick_hz, controller_hz=plat.controller_hz),
+            "capture": cyc(hp.capture_ticks, tick_hz=tick_hz, controller_hz=plat.controller_hz),
+        },
+        "slots": {
+            "rx_lo_hz": [s.rx_lo_hz for s in plan.slots],
+            "tx_lo_hz": [s.tx_lo_hz for s in plan.slots],
+            "words_q44_20": [str(w) for w in c.slots.words()],
+        },
+        "edges": edges,
+        "timing": {
+            "ok": True,
+            "busy_ticks": busy,
+            "period_ticks": hp.period_ticks,
+            "slack_ticks": hp.period_ticks - busy,
+            "end_ticks": c.end_ticks,
+            "duration_s": (c.end_ticks - t0_ticks) / tick_hz,
+        },
+        "pipeline_note": "FastLock pin select: hop k selects RX and TX profile hops[k] on its own "
+        "edge; profile 0 is live before hop 0; no priming edge, nothing staged",
+    }
 
 
 def dry_run(plan: HopPlan, *, fs: int, t0_ticks: int, tick_hz: int) -> dict:
@@ -378,7 +477,13 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("plan", help="compile a plan; --dry-run prints JSON and touches no hardware")
     p.add_argument("--plan", required=True, type=Path)
     p.add_argument("--t0-ticks", type=int, default=0)
-    p.add_argument("--tick-hz", type=int, default=DEFAULT_TICK_HZ)
+    p.add_argument(
+        "--platform",
+        choices=sorted(platform_mod.PLATFORMS),
+        default=None,
+        help="default: the plan file's `platform` key, else zu11eg",
+    )
+    p.add_argument("--tick-hz", type=int, default=None, help="default: the platform's Tick clock")
     p.add_argument("--dry-run", action="store_true")
 
     r = sub.add_parser(
@@ -447,8 +552,18 @@ def main(argv: list[str] | None = None) -> int:
     args = ap.parse_args(argv)
     try:
         if args.cmd == "plan":
-            plan, fs = load_plan(args.plan, tick_hz=args.tick_hz)
-            out = dry_run(plan, fs=fs, t0_ticks=args.t0_ticks, tick_hz=args.tick_hz)
+            plat = plan_platform(args.plan, args.platform)
+            tick_hz = args.tick_hz or plat.tick_hz
+            if plat.hop_mode == "fastlock":
+                out = dry_run_fastlock(
+                    load_fastlock_plan(args.plan),
+                    t0_ticks=args.t0_ticks,
+                    plat=plat,
+                    tick_hz=tick_hz,
+                )
+            else:
+                plan, fs = load_plan(args.plan, tick_hz=tick_hz)
+                out = dry_run(plan, fs=fs, t0_ticks=args.t0_ticks, tick_hz=tick_hz)
             json.dump(out, sys.stdout, indent=2)
             sys.stdout.write("\n")
             return 0

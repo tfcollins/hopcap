@@ -1,0 +1,23 @@
+{
+  "name": "adrv9361-loopback-8slot",
+  "description": "ADRV9361-Z7035 (lablp) FastLock pin-select hops, RX and TX, at 15.36 MSPS. Slot k = (rx_lo, tx_lo) = FastLock profile k = Tick CTRL_IN code k; profile 0 is live before hop 0. With the TX DDS tone at f_dds over the TX1->RX1 coupling, the RX tone sits at tx_lo - rx_lo + f_dds: +1, +3, -2, +5, -4, +2, -3, +4.5 MHz for slots 0..7, all inside +/-0.4 fs (6.144 MHz), at least 1 MHz from DC, and different (also from the previous tone's image) on every consecutive hop. Each round of eight is TX-only, RX-only, both, TX-only, RX-only, both, TX-only, both (0->1 moves only TX, 1->2 only RX, 2->3 both, ..., 7->0 both). Period 1.25 s: above the 1 s floor (one completion ack over network IIO per hop, ~1 s stalls on lablp), and not a whole second, so the hops sample four phases of the PPS second (the time base's two oscillators drift within each second). settle 0 and a 4 ms capture keep the hop transient in the window.",
+  "platform": "adrv9361",
+  "sample_rate_hz": 15360000,
+  "f_dds_hz": 1000000,
+  "slots": [
+    {"rx_lo_hz": 2400000000, "tx_lo_hz": 2400000000},
+    {"rx_lo_hz": 2400000000, "tx_lo_hz": 2402000000},
+    {"rx_lo_hz": 2405000000, "tx_lo_hz": 2402000000},
+    {"rx_lo_hz": 2410000000, "tx_lo_hz": 2414000000},
+    {"rx_lo_hz": 2410000000, "tx_lo_hz": 2405000000},
+    {"rx_lo_hz": 2404000000, "tx_lo_hz": 2405000000},
+    {"rx_lo_hz": 2420000000, "tx_lo_hz": 2416000000},
+    {"rx_lo_hz": 2420000000, "tx_lo_hz": 2423500000}
+  ],
+  "hops": [1, 2, 3, 4, 5, 6, 7, 0, 1, 2, 3, 4, 5, 6, 7, 0],
+  "period_us": 1250000,
+  "settle_us": 0,
+  "capture_us": 4000,
+  "pulse_us": 1000,
+  "lead_us": 500000
+}

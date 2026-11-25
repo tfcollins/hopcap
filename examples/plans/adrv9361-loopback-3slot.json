@@ -1,0 +1,18 @@
+{
+  "name": "adrv9361-loopback-3slot",
+  "description": "Short ADRV9361-Z7035 bring-up plan: three FastLock slots, six hops, one of each kind per round. Tones (tx_lo - rx_lo + f_dds) +1, +3, -2 MHz: 0->1 moves only TX (+1 -> +3 MHz), 1->2 only RX (+3 -> -2 MHz), 2->0 both (-2 -> +1 MHz). Same 1.25 s period, settle and capture as adrv9361-loopback-8slot.",
+  "platform": "adrv9361",
+  "sample_rate_hz": 15360000,
+  "f_dds_hz": 1000000,
+  "slots": [
+    {"rx_lo_hz": 2400000000, "tx_lo_hz": 2400000000},
+    {"rx_lo_hz": 2400000000, "tx_lo_hz": 2402000000},
+    {"rx_lo_hz": 2405000000, "tx_lo_hz": 2402000000}
+  ],
+  "hops": [1, 2, 0, 1, 2, 0],
+  "period_us": 1250000,
+  "settle_us": 0,
+  "capture_us": 4000,
+  "pulse_us": 1000,
+  "lead_us": 500000
+}
