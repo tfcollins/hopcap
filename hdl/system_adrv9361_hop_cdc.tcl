@@ -77,7 +77,14 @@ set_max_delay -datapath_only [expr {2.0 * $a9_divclk_period}] \
 set a9_sec_src [get_pins -of_objects \
   [hopcap_a9_cells {*axi_vrt49_framer_0*tb_seconds_*_reg*} "framer seconds-arm registers"] \
   -filter {REF_PIN_NAME == C}]
-set a9_sec_dst [hopcap_a9_cells {*vrt49_time_base_0*seconds_armed_reg*} "time base armed seconds"]
+# cfg_seconds_next loads both `seconds` (cfg_seconds_immediate) and `seconds_armed`
+# (vrt49_time_base.v); the first full build failed by 3.47 ns on the unbounded
+# tb_seconds_next -> seconds_reg path.
+set a9_sec_dst [get_cells -hier -filter {
+  NAME =~ *vrt49_time_base_0*/seconds_reg* || NAME =~ *vrt49_time_base_0*/seconds_armed_reg*}]
+if {[llength $a9_sec_dst] == 0} {
+  error "hopcap adrv9361 CDC: time base seconds / armed seconds registers not found"
+}
 set_max_delay -datapath_only $a9_divclk_period -from $a9_sec_src -to $a9_sec_dst
 
 # The published tuple (divclk) is bundled data qualified by tuple_toggle; it is stable for a
