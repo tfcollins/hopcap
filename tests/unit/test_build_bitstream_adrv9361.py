@@ -8,12 +8,16 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "scripts/build_bitstream.sh"
+PINS = json.loads((ROOT / "pins.json").read_text())
+sys.path.insert(0, str(ROOT / "scripts"))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 FINAL_TIMING = """| Tool Version : Vivado v.2025.1
 | Device       : 7z035i-fbg676
@@ -51,8 +55,29 @@ def ws(tmp_path):
     vtop = ROOT / "third_party/vrt49/hdl" / aw.A9_TOP
     (proj / "system_top.v").write_text(aw.patch_a9_system_top(vtop.read_text()))
     (ws / "corundum").mkdir()
+    import verify_evidence as ve
+
     (ws / "MANIFEST.json").write_text(
-        json.dumps({"profile": "adrv9361", "physical_port": "sfp", "build_env": {}})
+        json.dumps(
+            {
+                "schema": "hopcap-workspace-manifest/v1",
+                "profile": "adrv9361",
+                "physical_port": "sfp",
+                "build_env": {},
+                "pins": PINS,
+                "patch_queue": [],
+                "contract_checks": [],
+                "adi_hdl_head": PINS["adi_hdl"]["revision"],
+                "corundum_head": PINS["corundum"]["revision"],
+                "files": {
+                    rel: "0" * 64
+                    for rel in (
+                        *ve.A9_MANIFEST_FILES,
+                        "library/vrt49_fhm_hop_ctrl/vrt49_fhm_hop_ctrl.v",
+                    )
+                },
+            }
+        )
     )
     stub = tmp_path / "stub"
     stub.mkdir()
@@ -72,7 +97,12 @@ def ws(tmp_path):
 
 
 def _run(ws, settings, evidence):
-    env = dict(os.environ, ADI_HDL_SHA="a" * 40, CORUNDUM_SHA="b" * 40, HOPCAP_SOURCE_SHA="c" * 40)
+    env = dict(
+        os.environ,
+        ADI_HDL_SHA=PINS["adi_hdl"]["revision"],
+        CORUNDUM_SHA=PINS["corundum"]["revision"],
+        HOPCAP_SOURCE_SHA="c" * 40,
+    )
     return subprocess.run(
         [
             "bash",
@@ -132,3 +162,21 @@ def test_adrv9361_refuses_a_nonempty_missing_external_marker(ws):
     (ws_dir / "hdl/library/missing_external.log").write_text("eth_mac_1g.v\n")
     r = _run(ws_dir, settings, evidence)
     assert r.returncode != 0 and "missing_external.log" in r.stderr
+
+
+def test_adrv9361_evidence_passes_verify_evidence_and_fails_closed(ws):
+    import verify_evidence as ve
+
+    r = _run(*ws)
+    assert r.returncode == 0, r.stdout + r.stderr
+    evidence = ws[2]
+    assert ve.verify_bitstream(evidence) == []
+    # a .bin that is not the one recorded fails
+    (evidence / "system_top.bin").write_bytes(b"other")
+    errs = ve.verify_bitstream(evidence)
+    assert any("system_top.bin sha256 mismatch" in e for e in errs)
+    assert any("fpga_manager_bin_sha256" in e for e in errs)
+    # the adrv9361 profile does not inherit the ZU11EG timing / RX-netlist lines
+    summary = (evidence / "summary.txt").read_text()
+    (evidence / "summary.txt").write_text(summary.replace("profile adrv9361: OK", "OK"))
+    assert any("adrv9361 profile OK" in e for e in ve.verify_bitstream(evidence))
