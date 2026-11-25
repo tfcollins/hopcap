@@ -3,8 +3,8 @@
   "note": "Fail-closed upstream pins. tick/vrt49 must equal the submodule HEADs; adi_hdl/corundum/linux/u_boot/atf must equal what vrt49's hdl-corundum.yml and ci/platform-artifacts.json build against at the pinned vrt49 revision.",
   "tick": {
     "repository": "https://github.com/tfcollins/tick",
-    "revision": "841638f5c92fad5dda26b407c7004d57870361cd",
-    "why": "P3b timed-dma boot set; branch pins, not for main. tick p3b-spike-gate 841638f = 1787c33 plus the opt-in converter-clock timebase (TICK_TIMEBASE_CLK in the tron fragment, scheduler RTL unchanged) and the driver enabling its devicetree clock before the first register access, with the scheduler's S_AXI FREQ_HZ matched to the clock converter (libdatax P3b option 1, datax_sdk_sdr#40). The timed-dma profile sets TICK_TIMEBASE_CLK=core_clk_a (122.88 MHz); the default profile keeps sys_cpu_clk."
+    "revision": "6d24185c4dce96883d1936eb8f6dcf3b36dcfa97",
+    "why": "ADRV9361-Z7035 hop port (hopcap adrv9361 profile); branch pin, not for main. tick feat/adrv9361z7035-tick 6d24185 = main 716bd5e plus the Z7035 integration: hdl/projects/adrv9361z7035/ccfmc_lvds/tick_adrv9361z7035_ccfmc_lvds.tcl (scheduler at 0x44AA0000, IRQ ps-14, tick_clk/tick_ctrl_in ports), tick_adrv9361z7035_ctrl_in.xdc and the IOB-register + ad_iobuf CTRL_IN[2:0] block (f95660b). Tick runs at 50 MHz there (clk_wiz from FCLK0 behind an async AXI-Lite converter): with retained-slot repeats the scheduler misses 100 MHz on the Z7035 -2L (OOC WNS -0.27 ns, vrt49's full SFP build -0.38 ns; tick docs/adrv9361z7035-tick.md). Scheduler RTL is unchanged for the ZU11EG profiles (default keeps sys_cpu_clk, timed-dma keeps TICK_TIMEBASE_CLK=core_clk_a); the driver includes 841638f."
   },
   "vrt49": {
     "repository": "https://github.com/tfcollins/vrt49",
