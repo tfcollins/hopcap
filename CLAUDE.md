@@ -38,6 +38,11 @@ make -C hdl/sim/cocotb lint                       # Verilator --lint-only
 # adrv9361 workspace (needs ADI HDL + Corundum at the pins; --fetch or --adi-hdl/--corundum)
 python3 scripts/assemble_workspace.py --build-root build/ws-a9 --fetch --profile adrv9361
 
+# adrv9361 host side (docs/how-to/adrv9361-lablp.md): modules, offline plan, lablp session
+scripts/build_lablp_modules.sh --linux-dir <real adi-linux checkout @ 2023_r2_p1> --work-dir build/lablp-modules
+hopcap plan --plan examples/plans/adrv9361-loopback-8slot.json --dry-run
+python3 examples/hardware/adrv9361_hopcap.py --inspect     # --run needs HOPCAP_OUT/_LABLP_BIN/_TICK_MODULE/_VRT49_MODULE
+
 # libvrt49.so (needed by the chain test's golden codec)
 cmake -S third_party/vrt49 -B build/vrt49 -DVRT49_BUILD_TOOLS=OFF -DVRT49_BUILD_TESTS=OFF && cmake --build build/vrt49 -j
 ```
@@ -59,7 +64,9 @@ cmake -S third_party/vrt49 -B build/vrt49 -DVRT49_BUILD_TOOLS=OFF -DVRT49_BUILD_
   100 MHz (`hopctrl_regmap.json` `clock_hz`). On the ZU11EG default profile Tick also runs at
   100 MHz, so Tick ticks and controller cycles coincide (timed-dma: Tick at 122.88 MHz). On `adrv9361` Tick runs at **50 MHz** (it
   misses 100 MHz on the Z7035 -2L): Tick ticks = µs × 50, controller cycles = µs × 100. Plans are
-  in µs; convert at each consumer, never mix them.
+  in µs; convert at each consumer, never mix them. `src/hopcap/platform.py` holds the per-board
+  constants (Tick Hz, bit map, addresses, receiver); `HopController.program` takes the Tick rate
+  and converts to controller cycles.
 - Licences: new code MIT. Files derived from vrt49 keep their upstream SPDX header and are listed
   in `PROVENANCE.md`.
 

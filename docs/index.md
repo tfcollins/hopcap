@@ -42,6 +42,7 @@ tutorials/first-hardware-run
 
 how-to/build
 how-to/tron-nemo-runbook
+how-to/adrv9361-lablp
 how-to/decode-and-replay
 how-to/measure-settle
 ```
