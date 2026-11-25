@@ -122,8 +122,9 @@ def nominal_drift_ps(beats: int, *, nominal_sps: int, beats_per_pps: int) -> flo
 # ---------------------------------------------------------------------------
 
 
-def check_pps_period(beats: int, *, nominal_sps: int, margin: int) -> dict:
+def check_pps_period(beats_per_pps: int, *, nominal_sps: int, margin: int) -> dict:
     """``TB_PPS_PERIOD`` must sit within the overlay's margin of the nominal beat rate."""
+    beats = beats_per_pps
     out = {
         "beats_per_pps": beats,
         "nominal_sps": nominal_sps,
