@@ -21,8 +21,12 @@ class Runner:
     def __call__(self, argv, **kw):
         self.calls.append((argv, kw))
         rc, out = 0, ""
-        if "ControlMaster=yes" in argv and self.fail_master:
-            rc = 255
+        if "ControlMaster=yes" in argv:
+            assert kw["stdout"] is subprocess.DEVNULL and hasattr(kw["stderr"], "write")
+            if self.fail_master:
+                rc = 255
+                kw["stderr"].write("Permission denied\n")
+                return subprocess.CompletedProcess(argv, rc)
         if argv[-1].startswith("cat > "):
             self.pushed = kw["stdin"].read()
         return subprocess.CompletedProcess(argv, rc, stdout=out, stderr="denied" if rc else "")
@@ -47,13 +51,22 @@ def test_master_authenticates_once_through_askpass(tmp_path, monkeypatch):
     assert "StrictHostKeyChecking=accept-new" in argv
     for argv, _kw in r.calls[1:]:
         assert "ControlMaster=no" in argv and "BatchMode=yes" in argv
-        assert f"ControlPath={tmp_path / 'ssh-control.sock'}" in argv
+        assert f"ControlPath={sh.socket}" in argv
     sh.close()
     assert "-O" in r.calls[-1][0] and "exit" in r.calls[-1][0]
+    assert not sh.socket_dir.exists()
+
+
+def test_control_socket_path_fits_sun_path(tmp_path):
+    deep = tmp_path.joinpath(*(["evidence-directory-with-a-long-name"] * 6))
+    sh = PasswordSshShell("root@x", work_dir=deep, runner=Runner())
+    # ssh appends ".XXXXXXXXXXXXXXXX" while binding; sun_path is 108 bytes
+    assert len(str(sh.socket)) + 17 < 108
+    assert len(str(deep / "ssh-control.sock")) > 108, "the evidence dir alone would not fit"
 
 
 def test_master_failure_is_reported(tmp_path):
-    with pytest.raises(ShellError, match="denied"):
+    with pytest.raises(ShellError, match="Permission denied"):
         PasswordSshShell("root@x", work_dir=tmp_path, runner=Runner(fail_master=True)).run("true")
 
 
@@ -82,3 +95,35 @@ def test_helper_upload_uses_push_when_the_shell_streams(tmp_path):
     cmds = [c[0][-1] for c in r.calls if "ControlMaster=no" in c[0]]
     assert cmds[-1] == "chmod +x /tmp/hopcap_target.py"
     assert not any(c.startswith("printf %s") for c in cmds)
+
+
+def test_real_master_over_localhost_with_a_key(tmp_path):
+    """The real ssh binary: master starts (and returns), commands and a push go over it, and
+    close() tears it down. Uses key auth to localhost; skipped where that is unavailable."""
+    import shutil
+
+    if shutil.which("ssh") is None:
+        pytest.skip("no ssh")
+    probe = subprocess.run(
+        ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=3", "localhost", "true"],
+        capture_output=True,
+        timeout=10,
+    )
+    if probe.returncode != 0:
+        pytest.skip("no key ssh to localhost")
+    sh = PasswordSshShell(
+        "localhost",
+        work_dir=tmp_path.joinpath(*(["a-rather-long-evidence-directory-name"] * 4)),
+        auth=("-o", "PreferredAuthentications=publickey"),
+        persist_s=30,
+    )
+    try:
+        assert sh.run("echo hello").strip() == "hello"
+        src = tmp_path / "blob.bin"
+        src.write_bytes(bytes(range(256)) * 4096)
+        dst = tmp_path / "remote" / "blob.bin"
+        sh.push(src, str(dst))
+        assert dst.read_bytes() == src.read_bytes()
+    finally:
+        sh.close()
+    assert not sh.socket_dir.exists()

@@ -76,13 +76,24 @@ class PasswordSshShell:
         default_password: str | None = "analog",
         runner: Callable[..., subprocess.CompletedProcess] | None = None,
         persist_s: int = 1800,
+        auth: tuple[str, ...] = (
+            "-o",
+            "PreferredAuthentications=password,keyboard-interactive",
+            "-o",
+            "PubkeyAuthentication=no",
+        ),
     ):
         import os
+        import tempfile
 
         self.target = target
         self.work_dir = Path(work_dir)
         self.work_dir.mkdir(parents=True, exist_ok=True)
-        self.socket = self.work_dir / "ssh-control.sock"
+        # A Unix socket path must fit sun_path (108 bytes, and ssh appends a random suffix while
+        # binding): evidence directories are longer than that, so the socket lives in /tmp.
+        self.socket_dir = Path(tempfile.mkdtemp(prefix="hcssh-", dir="/tmp"))
+        self.socket = self.socket_dir / "m"
+        self.auth = tuple(auth)
         self.known_hosts = self.work_dir / "target_known_hosts"
         self.askpass = self.work_dir / "askpass.sh"
         self.password_env = password_env
@@ -99,10 +110,7 @@ class PasswordSshShell:
             "StrictHostKeyChecking=accept-new",
             "-o",
             f"UserKnownHostsFile={self.known_hosts}",
-            "-o",
-            "PreferredAuthentications=password,keyboard-interactive",
-            "-o",
-            "PubkeyAuthentication=no",
+            *self.auth,
             "-o",
             "ConnectTimeout=10",
         ]
@@ -124,26 +132,31 @@ class PasswordSshShell:
             DISPLAY=os.environ.get("DISPLAY", "none"),
         )
         env[self.password_env] = self.password
-        proc = self._run(
-            [
-                "ssh",
-                *self.options(),
-                "-o",
-                "ControlMaster=yes",
-                "-o",
-                f"ControlPersist={self.persist_s}",
-                "-f",
-                "-N",
-                self.target,
-            ],
-            text=True,
-            capture_output=True,
-            timeout=60,
-            env=env,
-            stdin=subprocess.DEVNULL,
-        )
+        # `ssh -f` backgrounds the master after authenticating; it must not inherit pipes the
+        # caller waits on (some OpenSSH builds keep them open for ControlPersist), so its stderr
+        # goes to a file that is read only on failure.
+        err_path = self.work_dir / "ssh-master.err"
+        with err_path.open("w") as err:
+            proc = self._run(
+                [
+                    "ssh",
+                    *self.options(),
+                    "-o",
+                    "ControlMaster=yes",
+                    "-o",
+                    f"ControlPersist={self.persist_s}",
+                    "-f",
+                    "-N",
+                    self.target,
+                ],
+                stdout=subprocess.DEVNULL,
+                stderr=err,
+                timeout=60,
+                env=env,
+                stdin=subprocess.DEVNULL,
+            )
         if proc.returncode != 0:
-            raise ShellError(f"ssh master to {self.target} failed: {proc.stderr.strip()}")
+            raise ShellError(f"ssh master to {self.target} failed: {err_path.read_text().strip()}")
         self.started = True
 
     def _ssh(self, cmd: str, *, timeout_s: float, stdin=None) -> subprocess.CompletedProcess:
@@ -206,6 +219,9 @@ class PasswordSshShell:
             stdin=subprocess.DEVNULL,
         )
         self.started = False
+        import shutil
+
+        shutil.rmtree(self.socket_dir, ignore_errors=True)
 
 
 def upload_file(shell: Shell, local: Path, remote: str, *, chunk: int = 256) -> None:
