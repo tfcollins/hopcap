@@ -326,7 +326,8 @@ def run_live(cfg: RunConfig, c: Components) -> RunReport:
         tick.park_trigger_low(lead_ticks=max(tick_hz // 100, 4 * rtt))
         c.stager.enable()  # ZU11EG: FHM GPIO mode; ADRV9361: profile pin select on
         stager_enabled = True
-        hc.require_idle()
+        if not cfg.gapless:  # gapless: the controller is disabled on purpose (gate open)
+            hc.require_idle()
 
         # 3. compile against the live clock only now, so the lead is not eaten by setup
         t0 = tick.now()
