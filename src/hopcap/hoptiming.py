@@ -24,7 +24,35 @@ from dataclasses import asdict, dataclass
 import numpy as np
 
 from hopcap import vrt
-from hopcap.timebase import beats_from_fraction
+from hopcap.timebase import TimeBaseError, beats_from_fraction
+
+PS_PER_SEC = 10**12
+
+
+def stamp_candidates(
+    sec: int, frac_ps: int, *, tick_hz: int, ps_per_sample_q32: int, ticks_per_beat: float
+) -> list[float]:
+    """Tick times a framer stamp can stand for, as ``(integer second edge, offset)`` pairs.
+
+    Absolute Tick times (~1e17) do not fit a float64 to the tick, so the edge stays an int.
+
+    The framer stamps a packet ``k`` beats after the tuple's PPS edge as
+    ``(sec, floor(k * q / 2^32))``; a packet whose first sample predates that edge by ``m``
+    beats (vrt49 axi_vrt49_framer "borrow" path) as ``(sec - 1, 1e12 - floor(m * q / 2^32))``.
+    Values on both grids return both readings; the caller disambiguates by continuity."""
+    out = []
+    try:
+        out.append(
+            (sec * tick_hz, beats_from_fraction(frac_ps, ps_per_sample_q32) * ticks_per_beat)
+        )
+    except TimeBaseError:
+        pass
+    try:
+        m = beats_from_fraction(PS_PER_SEC - frac_ps, ps_per_sample_q32)
+        out.append(((sec + 1) * tick_hz, -m * ticks_per_beat))
+    except TimeBaseError:
+        pass
+    return out
 
 
 @dataclass(frozen=True)
@@ -59,10 +87,14 @@ def hop_kind(a: tuple[int, int], b: tuple[int, int]) -> str:
 
 @dataclass
 class SampleStream:
-    """IF data samples with their Tick-time stamps (one RX channel, complex)."""
+    """IF data samples with their Tick-time stamps (one RX channel, complex).
 
-    ticks: np.ndarray  # float64 Tick time of each sample
+    ``ticks`` is relative to the integer ``base_ticks``: absolute Tick times (~1e17) lose
+    16 ticks of resolution in a float64."""
+
+    ticks: np.ndarray  # float64 Tick time of each sample minus base_ticks
     iq: np.ndarray  # complex128
+    base_ticks: int = 0
 
     @classmethod
     def from_records(
@@ -77,6 +109,8 @@ class SampleStream:
         t_parts: list[np.ndarray] = []
         z_parts: list[np.ndarray] = []
         ticks_per_beat = tick_hz / beats_per_pps
+        expect: float | None = None  # Tick time (minus base) the next packet should start at
+        base: int | None = None
         for r in records:
             if expected_peer and (r.peer_ip, r.peer_port) != expected_peer:
                 continue
@@ -89,8 +123,27 @@ class SampleStream:
             iq = p.iq()
             if not len(iq):
                 continue
-            k0 = beats_from_fraction(p.frac_ps, ps_per_sample_q32)
-            t0 = p.int_secs * tick_hz + k0 * ticks_per_beat
+            cands = stamp_candidates(
+                p.int_secs,
+                p.frac_ps,
+                tick_hz=tick_hz,
+                ps_per_sample_q32=ps_per_sample_q32,
+                ticks_per_beat=ticks_per_beat,
+            )
+            if not cands:
+                raise TimeBaseError(
+                    f"stamp ({p.int_secs}, {p.frac_ps} ps) is on neither framer grid for "
+                    f"ps_per_sample_q32 {ps_per_sample_q32}"
+                )
+            if base is None:
+                base = cands[0][0]
+            rel = [(edge - base) + off for edge, off in cands]
+            t0 = (
+                rel[0]
+                if expect is None or len(rel) == 1
+                else min(rel, key=lambda c: abs(c - expect))
+            )
+            expect = t0 + len(iq) * ticks_per_beat
             t_parts.append(t0 + np.arange(len(iq)) * ticks_per_beat)
             z_parts.append(iq[:, 0].astype(np.float64) + 1j * iq[:, 1].astype(np.float64))
         if not t_parts:
@@ -98,10 +151,11 @@ class SampleStream:
         ticks = np.concatenate(t_parts)
         iq = np.concatenate(z_parts)
         order = np.argsort(ticks, kind="stable")
-        return cls(ticks[order], iq[order])
+        return cls(ticks[order], iq[order], base_ticks=int(base))
 
-    def window(self, start: float, stop: float) -> tuple[np.ndarray, np.ndarray]:
-        lo, hi = np.searchsorted(self.ticks, [start, stop])
+    def window(self, start: int | float, stop: int | float) -> tuple[np.ndarray, np.ndarray]:
+        """Samples with absolute Tick time in [start, stop); times returned relative to base."""
+        lo, hi = np.searchsorted(self.ticks, [start - self.base_ticks, stop - self.base_ticks])
         return self.ticks[lo:hi], self.iq[lo:hi]
 
 
@@ -147,7 +201,7 @@ def measure_hop(
             new_tone_db=None,
             note="no samples around the edge",
         )
-    t_s = (t - executed_ticks) / tick_hz
+    t_s = (t - (executed_ticks - stream.base_ticks)) / tick_hz
     p_old = _tone_power(t_s, z, f_old, window)
     p_new = _tone_power(t_s, z, f_new, window)
     half = window // 2
@@ -194,6 +248,7 @@ def measure_hop(
         t_cross = t[crossing - 1] + frac * (t[crossing] - t[crossing - 1])
     else:
         t_cross = t[crossing]
+    rel_cross = float(t_cross - (executed_ticks - stream.base_ticks))  # ticks after the edge
     after = idx >= crossing + window
     new_db = (
         float(10 * np.log10(np.median(p_new[after]) / max(np.median(p_old[after]), 1e-12)))
@@ -202,8 +257,8 @@ def measure_hop(
     )
     return HopTiming(
         **base,
-        crossing_ticks=float(t_cross),
-        latency_ns=float((t_cross - executed_ticks) / tick_hz * 1e9),
+        crossing_ticks=executed_ticks + rel_cross,
+        latency_ns=rel_cross / tick_hz * 1e9,
         old_tone_db=old_db,
         new_tone_db=new_db,
     )
