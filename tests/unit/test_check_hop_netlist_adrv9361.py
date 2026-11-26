@@ -252,6 +252,40 @@ def test_a9_fails_on_swapped_event_and_slot(a9_tree):
     assert any("slot bits 3:1, event bit 0" in e for e in errs), errs
 
 
+_INSTANTIATED_CONCAT = (
+    "  system_tick_hop_gpio_concat_0 tick_hop_gpio_concat\n"
+    "       (.In0(tick_hop_event_slice_Dout),\n"
+    "        .In1(tick_hop_slot_slice_Dout),\n"
+    "        .dout(tick_hop_gpio_concat_dout));\n"
+)
+
+
+def test_a9_accepts_an_instantiated_concat_as_vivado_writes_it(a9_tree):
+    # The real 2025.1 synth netlist instantiates the BD xlconcat as
+    # system_tick_hop_gpio_concat_0 instead of inlining an assign.
+    _, proj, top = a9_tree
+    _rewrite(
+        proj,
+        "  assign tick_hop_gpio_concat_dout = {tick_hop_slot_slice_Dout, tick_hop_event_slice_Dout};\n",
+        _INSTANTIATED_CONCAT,
+    )
+    assert chn.check(proj, top, "adrv9361") == []
+
+
+def test_a9_instantiated_concat_still_catches_swapped_bits(a9_tree):
+    _, proj, top = a9_tree
+    _rewrite(
+        proj,
+        "  assign tick_hop_gpio_concat_dout = {tick_hop_slot_slice_Dout, tick_hop_event_slice_Dout};\n",
+        _INSTANTIATED_CONCAT.replace(
+            ".In0(tick_hop_event_slice_Dout),\n        .In1(tick_hop_slot_slice_Dout),",
+            ".In0(tick_hop_slot_slice_Dout),\n        .In1(tick_hop_event_slice_Dout),",
+        ),
+    )
+    errs = chn.check(proj, top, "adrv9361")
+    assert any("slot bits 3:1, event bit 0" in e for e in errs), errs
+
+
 def test_a9_fails_when_hop2_bypasses_the_sync(a9_tree):
     _, proj, top = a9_tree
     _rewrite(

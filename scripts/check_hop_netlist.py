@@ -400,7 +400,12 @@ def concat_sources(netlist: str, insts, net: str) -> list[str] | None:
         if am.group(1) == net:
             return [re.sub(r"\s+", "", s) for s in am.group(2).split(",")]
     for kind, conns in insts.values():
-        if "xlconcat" in kind and conns.get("dout") == net:
+        # A block-design xlconcat instance is named system_<cell>_0 in the synth
+        # netlist, so recognise it by its pins (In0..InN, dout) as well as by kind.
+        concat_shaped = set(conns) - {"dout"} and all(
+            re.fullmatch(r"In\d+", p) for p in set(conns) - {"dout"}
+        )
+        if ("xlconcat" in kind or concat_shaped) and conns.get("dout") == net:
             ins = sorted((int(p[2:]), n) for p, n in conns.items() if re.fullmatch(r"In\d+", p))
             return [n for _, n in reversed(ins)]
     return None
