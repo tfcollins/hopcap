@@ -46,3 +46,12 @@ def test_latency_window_is_pinned():
     lo, hi = t["window_ns"]
     assert 0 < lo < t["mean_ns"] < hi
     assert t["min_tone_margin_db"] >= 10
+
+
+def test_module_build_takes_the_suffix_from_scmversion_when_present():
+    # nemo's ADI Linux tree carries .scmversion "-284114-g<sha>": adding LOCALVERSION -284114
+    # on top made the release -284114-284114-g<sha> (CI run 45756901796).
+    sh = (ROOT / "scripts/build_lablp_modules.sh").read_text()
+    assert 'localversion="auto"' in sh
+    assert '"${linux_dir}/.scmversion"' in sh
+    assert "chown -R" in sh and "EXIT" in sh  # root-owned container output broke cleanup

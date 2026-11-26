@@ -24,7 +24,8 @@ Usage: scripts/build_lablp_modules.sh --linux-dir <adi-linux @ 2023_r2_p1> --wor
 
 Defaults target lablp's stock Kuiper 2023_R2_P1 image:
   --config               third_party/tick/ci/lablp/kuiper-2023_r2_p1-zynq-adrv9361-z7035.config.gz
-  --localversion         -284114
+  --localversion         auto: empty when the checkout's .scmversion already holds -284114-g<sha>
+                         (as Kuiper-prepared trees do), else -284114
   --expect-kernelrelease 6.1.70-284114-g2e8908932dfd
   --expect-kernel-version 6.1.70
   --expect-commit        2e8908932dfd9faf40ec9220a508aa1ce02699a8
@@ -39,7 +40,7 @@ image="ubuntu:24.04"
 linux_dir=""
 work_dir=""
 config_path="${repo_root}/third_party/tick/ci/lablp/kuiper-2023_r2_p1-zynq-adrv9361-z7035.config.gz"
-localversion="-284114"
+localversion="auto"
 expect_kernelrelease="6.1.70-284114-g2e8908932dfd"
 expect_kernel_version="6.1.70"
 expect_commit="2e8908932dfd9faf40ec9220a508aa1ce02699a8"
@@ -90,11 +91,27 @@ for f in "${tick_kernel}/axi_timed_command_scheduler.c" "${vrt49_kernel}/iio-vrt
   fi
 done
 linux_dir="$(cd "${linux_dir}" && pwd)"
+if [[ "${localversion}" == "auto" ]]; then
+  # A checkout prepared like Kuiper's carries .scmversion with the whole suffix
+  # ("-284114-g<sha>"), and setlocalversion then prints it verbatim: LOCALVERSION must be
+  # empty or the release reads -284114-284114-g<sha>. A plain checkout yields only -g<sha>.
+  want="${expect_kernelrelease#"${expect_kernel_version}"}"; want="${want%-g*}"
+  scm="$(cat "${linux_dir}/.scmversion" 2>/dev/null || true)"
+  if [[ -n "${want}" && "${scm}" == "${want}-g"* ]]; then
+    localversion=""
+  else
+    localversion="${want}"
+  fi
+  echo "localversion auto: '${localversion}' (.scmversion: ${scm:-none})"
+fi
 work_dir="$(realpath -m "${work_dir}")"
 config_name="config"
 [[ "${config_path}" == *.gz ]] && config_name="config.gz"
 
+# The container runs as root (apt); hand everything it writes back to the caller, also when
+# the build fails, so the work dir can be removed without root.
 container_script='set -euo pipefail
+trap "chown -R '"$(id -u):$(id -g)"' /work" EXIT
 export DEBIAN_FRONTEND=noninteractive
 apt-get update >/dev/null
 apt-get install -y --no-install-recommends git ca-certificates make gcc '"${apt_toolchain}"' bc bison flex libssl-dev libelf-dev xz-utils gzip kmod python3 >/dev/null
