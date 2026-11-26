@@ -98,7 +98,10 @@ against `IIO_URI`. Each stage's result, or its error, is written to `session.jso
 | `link` | framer UDP endpoint = `enp7s0` (applied, read back), PCS status at framer `0x78` | `resetdone` (bit 16) is 0, or the module is absent |
 | `host_receiver` | `192.168.2.10/24` on `enp7s0` on this host, now that the SFP has carrier | the address does not appear within ~30 s |
 | `timebase` | time base on PPS source `tick`, LOCKED; measured beats per PPS; Tick epoch aligned (below) | not locked, period outside the margin, or the alignment check fails |
-| `run` | `run_live` with the plan; bundle in `$HOPCAP_OUT/run` | the run's disposition is not `ok` |
+| `run` | gated `run_live` with the plan; bundle in `$HOPCAP_OUT/run` | the run's disposition is not `ok` |
+| `gapless` | the same plan with the hop controller disabled (continuous stream); hop landing times in `$HOPCAP_OUT/gapless` | a hop is unmeasured, or Tick's late/overflow counters moved |
+
+`HOPCAP_LABLP_MODE` picks `gated`, `gapless` or `both` (the HIL runner uses `both`).
 
 `adi-lg --power-down` powers the board off afterwards. That returns it to stock Kuiper.
 
@@ -179,6 +182,66 @@ hopcap run --plan examples/plans/adrv9361-loopback-3slot.json \
 `--platform adrv9361` is implied by the plan's `platform` key. The receiver binds
 `192.168.2.10:4991` (nemo `enp7s0`), the framer sends from `192.168.2.211`, and ssh uses
 `HOPCAP_TARGET_PASSWORD` (default `analog`).
+
+## 7. Prove the hops (HIL)
+
+```sh
+scripts/run_lablp_hopcap_hil.sh --bin <system_top.bin> \
+  --tick-module build/lablp-modules/axi_timed_command_scheduler.ko \
+  --vrt49-module build/lablp-modules/iio-vrt49-buffer.ko \
+  --evidence-dir evidence/lablp-hil --boots 3
+```
+
+Each boot is a separate `adi-lg request --power-down` session: a cold power-up, the runtime load,
+then a gated and a gapless run of the 8-slot loopback plan. The plan moves the RX LO only, the TX
+LO only, or both, on different edges. TX1 carries a DDS tone at `f_dds`, so the RX sees it at
+`tx_lo − rx_lo + f_dds`, and each slot has its own tone. Then
+`tests/hardware/test_hw_adrv9361.py` checks the evidence of every boot:
+
+- **Gapless: hops land at their Tick timestamps.**
+  - `hopcap.hoptiming` maps every sample to Tick time. It uses each second's measured length,
+    because the AD9361 and the Tick clock are independent oscillators.
+  - For each edge it finds where the new slot's tone overtakes the old one, in a 64-sample
+    window. The hop's latency is that crossing minus the edge's scheduled Tick tick.
+  - Every hop must fall in the image's window in `tests/hardware/adrv9361_hop_timing.json`, and
+    so must each kind's minimum and maximum.
+  - Before every edge the old tone must dominate by at least 10 dB, so no hop is early.
+  - Half-way between edges the current slot's tone must still dominate, so no hop happens
+    without an edge.
+  - Tick's late and overflow counters and the tap's drop counter must not move.
+- **Gated: Contexts and windows.**
+  - Each Context carries its slot's RX LO, epochs advance by one, and nothing is superseded.
+  - Each window holds the full capture.
+  - Each window's FFT peak is its slot's tone, which proves the RX and the TX profile both
+    switched.
+- **Across boots:** the per-boot mean latencies agree to within `boot_spread_ns`.
+
+**What the latency is.**
+- The path is: Tick edge → CTRL_IN IOB register (one 20 ns tick, deterministic) → AD9361
+  FastLock profile load and synthesizer settling → RX digital filters.
+- Measured on lablp over 4 boots × 16 hops: 2.4–11.7 µs, with per-boot means of 4.0–6.4 µs.
+- The spread is synthesizer settling: the same transitions are slow on every boot. It is not
+  jitter in when the hop command fires.
+- The window catches a hop scheduled at the wrong time. It would also have caught the
+  0.03–0.23 s offset the time base showed before `tap_accept`.
+
+**Why `tap_accept`.**
+- `vrt49_sample_tap` never stalls its source. It drops beats while the framer cannot take them,
+  for example while the link comes up.
+- The framer stamps from the beats it consumed, while the time base counted the tap's input. A
+  drop therefore made every later stamp late.
+- The framer's resync (lag above 65,536 beats) then re-anchored at an arbitrary phase: gated
+  windows sat a constant −0.03…−0.23 s off Tick, and gapless runs 0–16 µs off.
+- `hdl/tap_accept` feeds the time base one pulse per beat the tap accepted, so both sides count
+  the same beats.
+
+To re-measure a recording with changed analysis, keep its spool (`HOPCAP_KEEP_SPOOL=1`; gapless
+spools are about 1.6 GB and are deleted by default), then run
+`scripts/reanalyse_gapless.py <run>/gapless`.
+
+CI: `.github/workflows/hw-test-adrv9361.yml` builds the bitstream and modules on nemo, then runs
+the three-boot HIL. It runs on dispatch, weekly, or on a pull request from a branch of this
+repository once a maintainer adds the `hw-test` label.
 
 ## Troubleshooting
 

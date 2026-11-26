@@ -68,6 +68,9 @@ class HopTiming:
     new_tone_db: float | None  # power ratio new/old after the crossing
     samples: int
     note: str = ""
+    # old tone falls to a quarter of its pre-edge power: when the switch began. latency_ns
+    # (new tone overtakes old) also includes the synthesizer's settling.
+    onset_ns: float | None = None
 
     def as_dict(self) -> dict:
         return asdict(self)
@@ -277,6 +280,23 @@ def measure_hop(
     else:
         t_cross = t[crossing]
     rel_cross = float(t_cross - (executed_ticks - stream.base_ticks))  # ticks after the edge
+    # Onset. A centred boxcar over an abrupt switch at sample s holds half old tone at s:
+    # amplitude 1/2, power 1/4. So the first sample where the old tone's power drops below a
+    # quarter of its pre-edge median (and stays there for a window) marks the switch.
+    ref = float(np.median(p_old[pre]))
+    below = p_old < 0.25 * ref
+    onset_ns = None
+    for i in idx[valid][below[valid] & (t_s[valid] > -1e-3)]:
+        j = min(len(z) - half, i + window)
+        if np.all(below[i:j]):
+            if i > 0:
+                e0, e1 = p_old[i - 1] - 0.25 * ref, p_old[i] - 0.25 * ref
+                fr = e0 / (e0 - e1) if e1 != e0 else 0.0
+                t_on = t[i - 1] + fr * (t[i] - t[i - 1])
+            else:
+                t_on = t[i]
+            onset_ns = float(t_on - (executed_ticks - stream.base_ticks)) / tick_hz * 1e9
+            break
     after = idx >= crossing + window
     new_db = (
         float(10 * np.log10(np.median(p_new[after]) / max(np.median(p_old[after]), 1e-12)))
@@ -289,6 +309,7 @@ def measure_hop(
         latency_ns=rel_cross / tick_hz * 1e9,
         old_tone_db=old_db,
         new_tone_db=new_db,
+        onset_ns=onset_ns,
     )
 
 
@@ -315,6 +336,10 @@ def summarize(hops: Sequence[HopTiming]) -> dict:
     }
     for kind in ("rx-only", "tx-only", "both"):
         out[kind] = stats([h.latency_ns for h in measured if h.kind == kind])
+    on = [h for h in hops if h.onset_ns is not None]
+    out["onset"] = {"all": stats([h.onset_ns for h in on])}
+    for kind in ("rx-only", "tx-only", "both"):
+        out["onset"][kind] = stats([h.onset_ns for h in on if h.kind == kind])
     return out
 
 

@@ -49,6 +49,7 @@ def test_measures_latency_to_within_one_sample(a, b, kind, latency_us):
     )
     assert h.kind == kind
     assert h.latency_ns == pytest.approx(latency_us * 1e3, abs=65.1)  # one sample at 15.36 MSPS
+    assert h.onset_ns == pytest.approx(latency_us * 1e3, abs=130.2)  # boxcar leakage: 2 samples
     assert h.old_tone_db > 20 and h.new_tone_db > 20
 
 
@@ -155,3 +156,29 @@ def test_absolute_tick_times_keep_sub_tick_resolution():
         tick_hz=TICK,
     )
     assert h.latency_ns == pytest.approx(4000, abs=65.1)
+
+
+def test_onset_marks_the_start_of_a_slow_settle():
+    # a synthesizer that sweeps old -> new tone over 10 us, starting 3 us after the edge: the
+    # crossing lands mid-sweep, the onset near its start
+    n = int(FS * 2e-3)
+    t = np.arange(n) / FS
+    edge = n // 2
+    f0 = SLOTS[0][1] - SLOTS[0][0] + F_DDS
+    f1 = SLOTS[3][1] - SLOTS[3][0] + F_DDS
+    frac = np.clip((t - (t[edge] + 3e-6)) / 10e-6, 0, 1)
+    z = np.exp(1j * 2 * np.pi * np.cumsum(f0 + (f1 - f0) * frac) / FS) * 1000
+    st = SampleStream(t * TICK, z)
+    h = measure_hop(
+        st,
+        index=0,
+        executed_ticks=int(t[edge] * TICK),
+        from_slot=0,
+        to_slot=3,
+        slots=SLOTS,
+        f_dds_hz=F_DDS,
+        tick_hz=TICK,
+    )
+    assert h.onset_ns is not None and h.latency_ns is not None
+    assert h.onset_ns < h.latency_ns
+    assert 2000 < h.onset_ns < 6000, h.onset_ns

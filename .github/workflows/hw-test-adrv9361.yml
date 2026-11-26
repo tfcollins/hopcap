@@ -34,7 +34,11 @@ jobs:
     timeout-minutes: 300
     env:
       VIVADO_SETTINGS: /tools/Xilinx/2025.1/Vivado/settings64.sh
-      ADI_LINUX_DIR: ${{ github.workspace }}/../hopcap-adi-linux-2023_r2_p1
+      # Build trees go to nemo's data disk: / is shared with the hardware jobs' 50 GiB floor.
+      BUILD_BASE: /mnt/onetb/scratch/hopcap-ci
+      # ADI Linux @ 2023_r2_p1 (2e8908932dfd), mounted read-only by build_lablp_modules.sh;
+      # nemo already holds one for tick's lablp job. Cloned on first use where it does not.
+      ADI_LINUX_DIR: /home/tcollins/tick-kernel-284114-standalone
       BOOTS: ${{ inputs.boots || '3' }}
       PLAN: ${{ inputs.plan || 'examples/plans/adrv9361-loopback-8slot.json' }}
     steps:
@@ -50,24 +54,27 @@ jobs:
           echo "$PWD/.venv-hw/bin" >> "$GITHUB_PATH"
       - name: Assemble and build the adrv9361 bitstream
         run: |
-          set +u; source "$VIVADO_SETTINGS"; set -u
-          python3 scripts/assemble_workspace.py --build-root build/ws-a9 --fetch --profile adrv9361
-          scripts/build_bitstream.sh --ws build/ws-a9 --vivado-settings "$VIVADO_SETTINGS" \
-            --evidence "$RUNNER_TEMP/a9-bitstream"
-      - name: ADI Linux 2023_r2_p1 (module build tree, cached beside the workspace)
+          ws="$BUILD_BASE/ws-$GITHUB_RUN_ID"
+          python3 scripts/assemble_workspace.py --build-root "$ws" --fetch --profile adrv9361
+          flock /tmp/hdl-builder.lock scripts/build_bitstream.sh --ws "$ws" \
+            --vivado-settings "$VIVADO_SETTINGS" --evidence "$BUILD_BASE/bit-$GITHUB_RUN_ID"
+      - name: ADI Linux 2023_r2_p1 (module build tree)
         run: |
-          if [ ! -d "$ADI_LINUX_DIR/.git" ]; then
-            git clone -q --depth 1 --branch 2023_r2_p1 https://github.com/analogdevicesinc/linux.git "$ADI_LINUX_DIR"
+          if [ ! -f "$ADI_LINUX_DIR/Makefile" ]; then
+            ADI_LINUX_DIR="$BUILD_BASE/adi-linux-2023_r2_p1"
+            [ -d "$ADI_LINUX_DIR/.git" ] || git clone -q --depth 1 --branch 2023_r2_p1 \
+              https://github.com/analogdevicesinc/linux.git "$ADI_LINUX_DIR"
+            echo "ADI_LINUX_DIR=$ADI_LINUX_DIR" >> "$GITHUB_ENV"
           fi
           test "$(git -C "$ADI_LINUX_DIR" rev-parse HEAD)" = 2e8908932dfd9faf40ec9220a508aa1ce02699a8
       - name: Cross-build the Tick and vrt49 modules (32-bit ARMv7)
-        run: scripts/build_lablp_modules.sh --linux-dir "$ADI_LINUX_DIR" --work-dir "$RUNNER_TEMP/a9-modules"
+        run: scripts/build_lablp_modules.sh --linux-dir "$ADI_LINUX_DIR" --work-dir "$BUILD_BASE/mod-$GITHUB_RUN_ID"
       - name: Hop HIL on lablp
         run: |
           scripts/run_lablp_hopcap_hil.sh \
-            --bin "$RUNNER_TEMP/a9-bitstream/system_top.bin" \
-            --tick-module "$RUNNER_TEMP/a9-modules/axi_timed_command_scheduler.ko" \
-            --vrt49-module "$RUNNER_TEMP/a9-modules/iio-vrt49-buffer.ko" \
+            --bin "$BUILD_BASE/bit-$GITHUB_RUN_ID/system_top.bin" \
+            --tick-module "$BUILD_BASE/mod-$GITHUB_RUN_ID/axi_timed_command_scheduler.ko" \
+            --vrt49-module "$BUILD_BASE/mod-$GITHUB_RUN_ID/iio-vrt49-buffer.ko" \
             --evidence-dir "$GITHUB_WORKSPACE/evidence/lablp" --boots "$BOOTS" --plan "$PLAN"
       - name: Upload evidence
         if: always()
@@ -78,4 +85,8 @@ jobs:
           path: |
             evidence/lablp
             !evidence/lablp/**/datagrams.spool
+            ${{ env.BUILD_BASE }}/bit-${{ github.run_id }}
           retention-days: 14
+      - name: Remove the build trees
+        if: always()
+        run: rm -rf "$BUILD_BASE/ws-$GITHUB_RUN_ID" "$BUILD_BASE/mod-$GITHUB_RUN_ID" "$BUILD_BASE/bit-$GITHUB_RUN_ID"

@@ -8,15 +8,18 @@ every test skips, so the suite collects anywhere.
 
 What is proved, per boot:
 
-* gapless: every scheduled hop -- RX-only, TX-only and both -- lands in the vrt49 capture at
-  its scheduled Tick timestamp plus the image's fixed latency (``adrv9361_hop_timing.json``),
-  within the tolerance; Tick dropped/overflowed nothing; the tap lost no sample; half-way
-  between edges the tone is still the current slot's (no hop without an edge);
+* gapless: every scheduled hop -- RX-only, TX-only and both -- lands in the vrt49 capture
+  inside the image's latency window after its scheduled Tick timestamp
+  (``adrv9361_hop_timing.json``: pin register + FastLock synth settle + RX filter delay), the
+  old tone dominates right up to the edge (never early), Tick dropped/overflowed nothing, the
+  tap lost no sample, and half-way between edges the tone is still the current slot's (no
+  hop without an edge);
 * gated: every hop's Context carries its slot's RX LO, epochs advance by one, nothing is
   superseded, every window holds the full capture, and its loopback tone is the slot's
   (TX LO - RX LO + f_dds, so the RX and the TX profile both switched).
 
-Across boots: the per-boot mean latency agrees within the tolerance.
+Across boots: the per-boot mean latency agrees within ``boot_spread_ns`` and sits within
+``mean_tolerance_ns`` of the pinned ``mean_ns``.
 """
 
 from __future__ import annotations
@@ -61,13 +64,19 @@ def test_gapless_every_hop_lands_on_its_scheduled_tick(session):
     assert m["tick"]["late_count_delta"] == 0, "Tick dropped a late hop"
     assert m["tick"]["overflow_count_delta"] == 0, "Tick queue overflowed"
     assert m["counters"]["framer"]["v49_tx_dropped_packets"] == 0, "tap lost samples"
-    want, tol = TIMING["latency_ns"], TIMING["tolerance_ns"]
+    lo, hi = TIMING["window_ns"]
+    margin = TIMING["min_tone_margin_db"]
     bad = [
-        (h["index"], h["kind"], h["latency_ns"], h["note"])
+        (h["index"], h["kind"], h["latency_ns"], h["old_tone_db"], h["new_tone_db"], h["note"])
         for h in hops
-        if h["latency_ns"] is None or abs(h["latency_ns"] - want) > tol
+        if h["latency_ns"] is None
+        or not lo <= h["latency_ns"] <= hi
+        or (h["old_tone_db"] or 0) < margin  # the old tone must hold until the edge
+        or (h["new_tone_db"] or 0) < margin
     ]
-    assert not bad, f"hops off {want} +/- {tol} ns after their Tick timestamp: {bad}"
+    assert not bad, f"hops outside [{lo}, {hi}] ns after their Tick timestamp: {bad}"
+    mean = m["hop_timing_summary"]["all"]["mean_ns"]
+    assert abs(mean - TIMING["mean_ns"]) <= TIMING["mean_tolerance_ns"], mean
 
 
 def test_gapless_rx_and_tx_hops_both_land(session):
@@ -75,10 +84,13 @@ def test_gapless_rx_and_tx_hops_both_land(session):
     kinds = {h["kind"] for h in m["hop_timing"]}
     assert {"rx-only", "tx-only", "both"} <= kinds, f"plan must exercise every hop kind: {kinds}"
     summary = m["hop_timing_summary"]
-    want, tol = TIMING["latency_ns"], TIMING["tolerance_ns"]
+    lo, hi = TIMING["window_ns"]
     for kind in ("rx-only", "tx-only", "both"):
         assert summary[kind]["n"] >= 2
-        assert abs(summary[kind]["mean_ns"] - want) <= tol, (kind, summary[kind])
+        assert lo <= summary[kind]["min_ns"] and summary[kind]["max_ns"] <= hi, (
+            kind,
+            summary[kind],
+        )
 
 
 def test_gapless_no_hop_without_an_edge(session):
@@ -125,5 +137,5 @@ def test_gated_windows_carry_the_slots_rx_and_tx_tone(session):
 def test_repeat_boots_agree():
     means = [_manifest(s, "gapless")["hop_timing_summary"]["all"]["mean_ns"] for s in SESSIONS]
     spread = max(means) - min(means)
-    assert spread <= TIMING["tolerance_ns"], f"per-boot mean latency {means} spread {spread} ns"
-    assert abs(statistics.fmean(means) - TIMING["latency_ns"]) <= TIMING["tolerance_ns"]
+    assert spread <= TIMING["boot_spread_ns"], f"per-boot mean latency {means} spread {spread} ns"
+    assert abs(statistics.fmean(means) - TIMING["mean_ns"]) <= TIMING["mean_tolerance_ns"]
