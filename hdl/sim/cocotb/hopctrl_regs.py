@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: MIT
 """Register offsets for vrt49_fhm_hop_ctrl, loaded from hdl/hopctrl_regmap.json so the
 testbench can never drift from the published map."""
+
 from __future__ import annotations
 
 import json

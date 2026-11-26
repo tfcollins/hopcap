@@ -8,6 +8,7 @@ host relies on: after a hop event no IF Data leaves until the changed Context
 carrying the slot frequency and epoch has left, and the data that follows is
 exclusively post-settle samples.
 """
+
 from __future__ import annotations
 
 import math
@@ -16,7 +17,6 @@ from dataclasses import dataclass
 import cocotb
 from cocotb.clock import Clock
 from cocotb.triggers import ReadOnly, RisingEdge, Timer
-
 from hopctrl_regs import REG, STATE, slot_hi, slot_lo
 from test_fhm_hop_ctrl import CTRL_ENABLE, CTRL_IDLE_OPEN, axi_read, axi_write
 from vrt49_codec import FrameSpec, build_context_packet
@@ -35,8 +35,8 @@ F6 = 2_470_000_000 << 20
 @dataclass
 class Packet:
     words: list[int]
-    cycle_last: int          # cycle index when TLAST left
-    ramp_at_last: int        # source ramp value when TLAST left
+    cycle_last: int  # cycle index when TLAST left
+    ramp_at_last: int  # source ramp value when TLAST left
 
     @property
     def kind(self) -> str:
@@ -101,7 +101,8 @@ class Harness:
                 self.gate_open_cycles.append(self.cycle)
                 if not self.accepted_since_event:
                     self.protocol_errors.append(
-                        f"gate reopened at cycle {self.cycle} before the Context left the framer")
+                        f"gate reopened at cycle {self.cycle} before the Context left the framer"
+                    )
             prev = now
 
     async def cfg_write(self, addr: int, data: int):
@@ -116,9 +117,22 @@ class Harness:
         dut = self.dut
         cocotb.start_soon(Clock(dut.clk, 10, units="ns").start())
         dut.resetn.value = 0
-        for sig in ("scheduler_gpio", "s_axis_tdata", "s_axis_tvalid", "cfg_addr", "cfg_wdata",
-                    "cfg_wstrobe", "cfg_raddr", "s_axi_awvalid", "s_axi_wvalid", "s_axi_bready",
-                    "s_axi_arvalid", "s_axi_rready", "s_axi_awprot", "s_axi_arprot"):
+        for sig in (
+            "scheduler_gpio",
+            "s_axis_tdata",
+            "s_axis_tvalid",
+            "cfg_addr",
+            "cfg_wdata",
+            "cfg_wstrobe",
+            "cfg_raddr",
+            "s_axi_awvalid",
+            "s_axi_wvalid",
+            "s_axi_bready",
+            "s_axi_arvalid",
+            "s_axi_rready",
+            "s_axi_awprot",
+            "s_axi_arprot",
+        ):
             getattr(dut, sig).value = 0
         dut.m_axis_tready.value = 1
         for _ in range(4):
@@ -178,11 +192,24 @@ def check_context(ctx: Packet, freq_q44_20: int, epoch: int):
     # Byte-exact against the libvrt49-backed golden builder: only the fields the
     # fabric path owns (RF frequency, info source = epoch) and the framer-owned
     # prologue counters/timestamp may be non-zero in this testbench.
-    spec = FrameSpec(stream_id=STREAM_ID, pkt_count=(ctx.words[0] >> 16) & 0xF,
-                     int_secs=ctx.words[4], frac_ps=(ctx.words[5] << 32) | ctx.words[6])
-    golden = build_context_packet(spec, changed=True, bandwidth=0, rf_frequency=freq_q44_20,
-                                  overrange_count=0, sample_rate=0, state_event=ctx.words[17],
-                                  signal_format=0, discrete_io_32=0, info_source_id=epoch)
+    spec = FrameSpec(
+        stream_id=STREAM_ID,
+        pkt_count=(ctx.words[0] >> 16) & 0xF,
+        int_secs=ctx.words[4],
+        frac_ps=(ctx.words[5] << 32) | ctx.words[6],
+    )
+    golden = build_context_packet(
+        spec,
+        changed=True,
+        bandwidth=0,
+        rf_frequency=freq_q44_20,
+        overrange_count=0,
+        sample_rate=0,
+        state_event=ctx.words[17],
+        signal_format=0,
+        discrete_io_32=0,
+        info_source_id=epoch,
+    )
     got = b"".join(w.to_bytes(4, "big") for w in ctx.words)
     assert got == golden, "Context bytes differ from golden codec"
 
@@ -191,12 +218,12 @@ def check_context(ctx: Packet, freq_q44_20: int, epoch: int):
 async def hop_event_publishes_context_before_any_fresh_data(dut):
     h = Harness(dut)
     await h.start(settle=60, capture=0, slots={3: F3})
-    await h.wait_packets(3)                     # steady state streaming
+    await h.wait_packets(3)  # steady state streaming
     edge_ramp = await h.hop(3)
     before = len(h.packets)
     await h.wait_packets(before + 4)
 
-    after = h.packets[before - 1:]              # include the packet that may have been in flight
+    after = h.packets[before - 1 :]  # include the packet that may have been in flight
     ctxs = contexts(after)
     assert len(ctxs) == 1, [p.kind for p in after]
     ctx = ctxs[0]
@@ -213,7 +240,7 @@ async def hop_event_publishes_context_before_any_fresh_data(dut):
     # the gate reopened (no stale pre-hop samples survive the drain).
     assert h.gate_open_cycles, "gate never reopened"
     reopened_ramp_floor = edge_ramp  # conservative: stale == anything from before the edge
-    for p in after[i_ctx + 1:]:
+    for p in after[i_ctx + 1 :]:
         assert p.kind == "data"
         assert min(p.payload) > reopened_ramp_floor, "stale pre-hop sample after Context"
     assert await axi_read(dut, REG["EPOCH"]) == 1
@@ -236,12 +263,12 @@ async def capture_ticks_bounds_the_data_that_follows_context(dut):
         if int(dut.state_out.value) == STATE["CLOSED"]:
             break
     await Timer(1, units="ns")
-    await h.run(6 * PAYLOAD_WORDS)             # drain any owned packet, then confirm silence
+    await h.run(6 * PAYLOAD_WORDS)  # drain any owned packet, then confirm silence
     settled = list(h.packets)
     ctxs = contexts(settled)
     assert len(ctxs) == 1
     i_ctx = settled.index(ctxs[0])
-    post = settled[i_ctx + 1:]
+    post = settled[i_ctx + 1 :]
     assert all(p.kind == "data" for p in post)
     expected = capture * 2 / 3 / PAYLOAD_WORDS  # samples admitted / samples per packet
     assert math.floor(expected) - 1 <= len(post) <= math.ceil(expected) + 1, (len(post), expected)
@@ -266,7 +293,7 @@ async def consecutive_hops_each_get_one_context_with_increasing_epoch(dut):
     check_context(ctxs[0], F3, epoch=1)
     check_context(ctxs[1], F6, epoch=2)
     i0, i1 = h.packets.index(ctxs[0]), h.packets.index(ctxs[1])
-    assert any(p.kind == "data" for p in h.packets[i0 + 1:i1]), "no capture between hops"
+    assert any(p.kind == "data" for p in h.packets[i0 + 1 : i1]), "no capture between hops"
     assert await axi_read(dut, REG["EVENT_COUNT"]) == 2
     assert await axi_read(dut, REG["SUPERSEDED_COUNT"]) == 0
     assert not h.protocol_errors, h.protocol_errors

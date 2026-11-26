@@ -88,6 +88,7 @@ REQUIRED_NETLIST_A9 = (
     "axi_vrt49_framer",
     "vrt49_time_base",
     "tick_pps_gen",
+    "tap_accept",
     "tick_hop_gpio_sync",  # module reference: its type is checked through the wrapper VLNV
 )
 FORBIDDEN_NETLIST_A9 = ("vrt49_ad9361_hop_ctrl", "tick_scheduler_0", "fastlock_select")
@@ -493,7 +494,16 @@ def check_adrv9361(netlist: str) -> list[str]:
     same((pg, "pps_out"), (tb, "pps_in"), "time base pps_in from tick_pps_gen")
     same((pg, "clk"), (sched, "s_axi_aclk"), "tick_pps_gen on Tick's clock")
     same((tb, "divclk"), (tap, "clk"), "time base on the tap's clock")
-    same((tb, "sample_valid"), (tap, "sample_valid"), "time base counts the tap's beats")
+    # the time base counts the tap's forwarded beats: tap_accept on the tap's input + drops
+    same(("tap_accept_0", "sample_valid"), (tap, "sample_valid"), "tap_accept sees the tap input")
+    same(
+        ("tap_accept_0", "dropped_sample_count"),
+        (tap, "dropped_sample_count"),
+        "tap_accept sees the tap's drop count",
+    )
+    same(("tap_accept_0", "clk"), (tap, "clk"), "tap_accept on the tap's clock")
+    same((tb, "sample_valid"), ("tap_accept_0", "accepted"), "time base counts accepted beats")
+    differ((tb, "sample_valid"), (tap, "sample_valid"), "time base not on the raw tap input")
     alt = insts.get(tb, ("", {}))[1].get("pps_alt_in")
     if not alt or not (_LITERAL.fullmatch(alt) or alt in _constant_drivers(insts)):
         errors.append(f"{tb}.pps_alt_in is not tied off ({alt})")

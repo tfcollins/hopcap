@@ -288,9 +288,7 @@ def test_fragment_pps_time_base_and_throttle():
         "ad_connect util_ad9361_divclk_reset/peripheral_aresetn vrt49_time_base_0/divclk_resetn"
         in code
     )
-    assert (
-        "ad_connect util_ad9361_adc_pack/packed_fifo_wr_en vrt49_time_base_0/sample_valid" in code
-    )
+    assert "ad_connect tap_accept_0/accepted vrt49_time_base_0/sample_valid" in code
     assert "ad_connect hopcap_tb_pps_alt_tieoff/dout vrt49_time_base_0/pps_alt_in" in code
     for sig in ("toggle", "seconds", "count", "pps_period", "lock_state", "missed_count"):
         assert f"tb_tuple_{sig}" in code

@@ -23,7 +23,7 @@
 #   PPS   tick_pps_gen_0 on tick_clk: one TICK_HZ-cycle second, 100 ms pulse, into Tick's
 #         pps_in and vrt49_time_base_0's pps_in (VRT time = Tick time; no GPS).
 #   VRT   vrt49_time_base_0 on the AD9361 data clock (util_ad9361_divclk), sample_valid =
-#         the tap's packed_fifo_wr_en; framer tb_* / tb_tuple_* wired as on the ZU11EG.
+#         tap_accept (the tap's beats minus its drops); framer tb_* / tb_tuple_* as on the ZU11EG.
 #         CDC: system_adrv9361_hop_cdc.tcl, post-route gate check_adrv9361_hop.tcl.
 #   Link  vrt49_link_throttle FORWARD_EVERY_N 1: every frame is forwarded (15.36 MSPS, one
 #         RX channel, ~0.5 Gb/s on the 1G link); hop stamps need consecutive packets.
@@ -207,7 +207,14 @@ ad_connect util_ad9361_divclk_reset/peripheral_aresetn vrt49_time_base_0/divclk_
 ad_connect tick_pps_gen_0/pps_out vrt49_time_base_0/pps_in
 ad_ip_instance xlconstant hopcap_tb_pps_alt_tieoff [list CONST_WIDTH 1 CONST_VAL 0]
 ad_connect hopcap_tb_pps_alt_tieoff/dout vrt49_time_base_0/pps_alt_in
-ad_connect util_ad9361_adc_pack/packed_fifo_wr_en vrt49_time_base_0/sample_valid
+# The time base counts only the beats the tap forwarded (tap_accept), the same beats the
+# framer consumes, so a tap drop can never put the framer's stamps behind the time base.
+ad_ip_instance tap_accept tap_accept_0
+ad_connect util_ad9361_divclk/clk_out tap_accept_0/clk
+ad_connect util_ad9361_divclk_reset/peripheral_aresetn tap_accept_0/resetn
+ad_connect util_ad9361_adc_pack/packed_fifo_wr_en tap_accept_0/sample_valid
+ad_connect vrt49_rx_tap/dropped_sample_count tap_accept_0/dropped_sample_count
+ad_connect tap_accept_0/accepted vrt49_time_base_0/sample_valid
 foreach sig {tuple_toggle tuple_seconds tuple_count tuple_pps_period tuple_lock_state tuple_missed_count} {
   ad_connect vrt49_time_base_0/$sig axi_vrt49_framer_0/tb_$sig
 }
@@ -217,8 +224,9 @@ ad_connect axi_vrt49_framer_0/tb_seconds_immediate vrt49_time_base_0/cfg_seconds
 ad_connect axi_vrt49_framer_0/tb_nominal_sps       vrt49_time_base_0/cfg_nominal_sps
 ad_connect axi_vrt49_framer_0/tb_pps_margin        vrt49_time_base_0/cfg_pps_margin
 ad_connect axi_vrt49_framer_0/tb_pps_source        vrt49_time_base_0/cfg_pps_source
-# The time base and the tap must count the same beats on the same clock.
-hopcap_a9_same_net vrt49_time_base_0/sample_valid vrt49_rx_tap/sample_valid "time base counts the tap's beats"
+# tap_accept sees the tap's input and drop count on the tap's clock; the time base runs there.
+hopcap_a9_same_net tap_accept_0/sample_valid vrt49_rx_tap/sample_valid "tap_accept sees the tap's input beats"
+hopcap_a9_same_net tap_accept_0/clk vrt49_rx_tap/clk "tap_accept on the tap's clock"
 hopcap_a9_same_net vrt49_time_base_0/divclk vrt49_rx_tap/clk "time base on the tap's clock"
 
 # ---------------------------------------------------------------------------------------
@@ -227,5 +235,5 @@ ad_ip_parameter vrt49_link_throttle CONFIG.FORWARD_EVERY_N 1
 
 puts "hopcap adrv9361: Tick (third_party/tick) at 0x44AA0000, $hopcap_tick_hz Hz, IRQ ps-14; CTRL_IN\[2:0\] = gpio_out\[2:0\]"
 puts "hopcap adrv9361: vrt49_fhm_hop_ctrl_0 at $hop_ctrl_base on sys_cpu_clk, scheduler_gpio = {gpio_out\[2:0\], gpio_out\[3\]} via tick_hop_gpio_sync"
-puts "hopcap adrv9361: tick_pps_gen_0 -> Tick pps_in + vrt49_time_base_0 pps_in; time base on util_ad9361_divclk, sample_valid = packed_fifo_wr_en"
+puts "hopcap adrv9361: tick_pps_gen_0 -> Tick pps_in + vrt49_time_base_0 pps_in; time base on util_ad9361_divclk, sample_valid = tap_accept (tap beats minus drops)"
 puts "hopcap adrv9361: vrt49_link_throttle FORWARD_EVERY_N 1"

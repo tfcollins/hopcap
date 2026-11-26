@@ -157,7 +157,7 @@ A9_VRT49_IPS = (
     "vrt49_sfp_1g",
     "vrt49_time_base",
 )
-A9_HOP_IPS = ("vrt49_fhm_hop_ctrl", "tick_pps_gen")  # packaged hopcap IP (LIB_DEPS)
+A9_HOP_IPS = ("vrt49_fhm_hop_ctrl", "tick_pps_gen", "tap_accept")  # packaged hopcap IP (LIB_DEPS)
 A9_MODREF_RTL = (Path("library/tick_gpio_sync/tick_gpio_sync.v"),)  # hopcap module reference
 A9_HOP_FRAGMENT = "system_bd_adrv9361_hop.tcl"
 A9_CDC_TCL = "system_adrv9361_hop_cdc.tcl"
@@ -166,7 +166,7 @@ A9_PROJECT_FILES = (A9_HOP_FRAGMENT, A9_CDC_TCL, A9_GATE_TCL)
 A9_HOP_FRAGMENT_SOURCE = f"source {A9_HOP_FRAGMENT}"
 A9_TOP = A9_PROJECT_REL / "system_top.v"
 A9_LIB_DEPS_OLD = "LIB_DEPS += tick_vendor vrt49_ad9361_hop_ctrl\n"
-A9_LIB_DEPS_NEW = "LIB_DEPS += vrt49_time_base vrt49_fhm_hop_ctrl tick_pps_gen\n"
+A9_LIB_DEPS_NEW = "LIB_DEPS += vrt49_time_base vrt49_fhm_hop_ctrl tick_pps_gen tap_accept\n"
 A9_MAKEFILE_BLOCK = (
     "# hopcap adrv9361: Tick from third_party/tick (module reference, 50 MHz), HOP2, internal\n"
     "# 1PPS and the VRT time base replace vrt49's vendored Tick and HOP1.\n"

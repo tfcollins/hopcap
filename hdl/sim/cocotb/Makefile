@@ -45,6 +45,7 @@ lint:
 	verilator --lint-only -Wall $(LINT_WARN) $(HDL)/tick_pps_select/tick_pps_select.v
 	verilator --lint-only -Wall $(LINT_WARN) $(HDL)/tick_gpio_sync/tick_gpio_sync.v
 	verilator --lint-only -Wall $(LINT_WARN) $(HDL)/tick_pps_gen/tick_pps_gen.v
+	verilator --lint-only -Wall $(LINT_WARN) $(HDL)/tap_accept/tap_accept.v
 	verilator --lint-only -Wall $(LINT_WARN) -Wno-MULTITOP \
 	    -I$(VRT49_HDL)/axi_vrt49_framer \
 	    $(HDL)/sim/cocotb/fhm_hop_chain.v \
@@ -104,8 +105,16 @@ export PPS_GEN_PULSE_TICKS := 3
 COMPILE_ARGS += -GTICK_HZ=$(PPS_GEN_TICK_HZ) -GPULSE_TICKS=$(PPS_GEN_PULSE_TICKS)
 endif
 
+# tap_accept against the real vrt49_sample_tap (adrv9361 time-base sample_valid)
+ifeq ($(TOP),tap_accept)
+TOPLEVEL := tap_accept_chain
+MODULE   := test_tap_accept
+VERILOG_SOURCES := $(HDL)/sim/cocotb/tap_accept_chain.v $(HDL)/tap_accept/tap_accept.v \
+    $(REPO)/third_party/vrt49/hdl/vrt49_sample_tap/vrt49_sample_tap.v
+endif
+
 ifndef TOPLEVEL
-$(error Set TOP=vrt49_fhm_hop_ctrl | fhm_hop_chain | tick_pps_select | tick_gpio_sync | tick_pps_gen)
+$(error Set TOP=vrt49_fhm_hop_ctrl | fhm_hop_chain | tick_pps_select | tick_gpio_sync | tick_pps_gen | tap_accept)
 endif
 
 export PYTHONPATH := $(CURDIR):$(REPO)/third_party/vrt49/hdl/sim/cocotb:$(PYTHONPATH)

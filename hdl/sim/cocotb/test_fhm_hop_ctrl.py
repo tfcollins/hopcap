@@ -1,11 +1,11 @@
 # SPDX-License-Identifier: MIT
 """Unit tests for vrt49_fhm_hop_ctrl: register file, event detection, gate state machine."""
+
 from __future__ import annotations
 
 import cocotb
 from cocotb.clock import Clock
 from cocotb.triggers import ReadOnly, RisingEdge, Timer
-
 from hopctrl_regs import ID_WORD, REG, STATE, VERSION_WORD, slot_hi, slot_lo
 
 CTRL_ENABLE = 1 << 0
@@ -144,13 +144,22 @@ async def disabled_controller_ignores_edges_and_keeps_gate_open(dut):
 # state machine
 # --------------------------------------------------------------------------
 
+
 async def tick(dut, n: int = 1) -> None:
     for _ in range(n):
         await RisingEdge(dut.clk)
 
 
-async def arm(dut, *, settle: int, capture: int, slots: dict[int, int], ctrl_extra: int = 0,
-              drain_timeout: int = 0, seq_count: int = 8) -> None:
+async def arm(
+    dut,
+    *,
+    settle: int,
+    capture: int,
+    slots: dict[int, int],
+    ctrl_extra: int = 0,
+    drain_timeout: int = 0,
+    seq_count: int = 8,
+) -> None:
     await axi_write(dut, REG["SETTLE_TICKS"], settle)
     await axi_write(dut, REG["CAPTURE_TICKS"], capture)
     await axi_write(dut, REG["DRAIN_TIMEOUT_TICKS"], drain_timeout)
@@ -312,7 +321,7 @@ async def event_during_settle_restarts_with_latest_slot_and_counts_superseded(du
     await wait_state(dut, STATE["SETTLE"])
     await tick(dut, 5)
     await fall(dut)
-    await rise(dut, 5)                      # second hop before the first settled
+    await rise(dut, 5)  # second hop before the first settled
     await wait_state(dut, STATE["PUBLISH"])
     await ReadOnly()
     assert int(dut.fabric_rf_frequency_q44_20.value) == F5, "latest slot wins"
@@ -344,7 +353,7 @@ async def event_after_handshake_republishes_without_opening(dut):
     assert dut.fabric_context_valid.value == 0, "handshake consumed valid"
     await Timer(1, units="ns")
     await fall(dut)
-    await rise(dut, 5)                      # stale Context is in flight
+    await rise(dut, 5)  # stale Context is in flight
     await tick(dut, 3)
     dut.fabric_context_accepted.value = 1
     await tick(dut)
@@ -369,11 +378,17 @@ async def event_after_handshake_republishes_without_opening(dut):
 @cocotb.test()
 async def sequence_slot_mode_advances_and_wraps(dut):
     await reset(dut)
-    await arm(dut, settle=1, capture=0, slots={0: 10 << 20, 1: 11 << 20, 2: 12 << 20},
-              ctrl_extra=CTRL_SLOT_SOURCE_SEQ, seq_count=3)
+    await arm(
+        dut,
+        settle=1,
+        capture=0,
+        slots={0: 10 << 20, 1: 11 << 20, 2: 12 << 20},
+        ctrl_extra=CTRL_SLOT_SOURCE_SEQ,
+        seq_count=3,
+    )
     seen = []
     for _ in range(4):
-        await rise(dut, 7)                  # gpio slot bits must be ignored
+        await rise(dut, 7)  # gpio slot bits must be ignored
         await wait_state(dut, STATE["PUBLISH"])
         await ReadOnly()
         seen.append(int(dut.fabric_rf_frequency_q44_20.value) >> 20)
@@ -392,7 +407,7 @@ async def sequence_slot_mode_advances_and_wraps(dut):
 async def drain_timeout_proceeds_and_sets_sticky(dut):
     await reset(dut)
     await arm(dut, settle=1, capture=0, slots={0: F2}, drain_timeout=12)
-    dut.fabric_samples_drained.value = 0    # framer never reports drained
+    dut.fabric_samples_drained.value = 0  # framer never reports drained
     await rise(dut, 0)
     n = await wait_state(dut, STATE["SETTLE"], limit=40)
     assert 12 <= n <= 15, n
@@ -417,7 +432,7 @@ async def drain_without_timeout_waits_forever(dut):
 async def idle_open_zero_keeps_gate_closed_until_first_capture(dut):
     await reset(dut)
     await axi_write(dut, REG["SETTLE_TICKS"], 1)
-    await axi_write(dut, REG["CTRL_STATUS"], CTRL_ENABLE)      # idle_open = 0
+    await axi_write(dut, REG["CTRL_STATUS"], CTRL_ENABLE)  # idle_open = 0
     await tick(dut)
     await ReadOnly()
     assert dut.stream_enable.value == 0
@@ -438,7 +453,7 @@ async def disable_mid_flight_returns_idle_and_opens_gate(dut):
     await arm(dut, settle=500, capture=0, slots={0: F2})
     await rise(dut, 0)
     await wait_state(dut, STATE["SETTLE"])
-    await axi_write(dut, REG["CTRL_STATUS"], CTRL_IDLE_OPEN)   # enable = 0
+    await axi_write(dut, REG["CTRL_STATUS"], CTRL_IDLE_OPEN)  # enable = 0
     await tick(dut)
     await ReadOnly()
     assert int(dut.state_out.value) == STATE["IDLE"]
@@ -456,7 +471,7 @@ async def event_in_the_same_cycle_as_the_handshake_republishes(dut):
     await arm(dut, settle=2, capture=0, slots={2: F2, 5: F5})
     await rise(dut, 2)
     await wait_state(dut, STATE["PUBLISH"])
-    await fall(dut)                          # trigger low so the next write is a real rising edge
+    await fall(dut)  # trigger low so the next write is a real rising edge
     await ReadOnly()
     assert dut.fabric_context_valid.value == 1
     await Timer(1, units="ns")

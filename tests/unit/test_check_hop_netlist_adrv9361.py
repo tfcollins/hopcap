@@ -88,6 +88,13 @@ module system
   system_vrt49_rx_tap_0 vrt49_rx_tap
        (.clk(util_ad9361_divclk_clk_out),
         .resetn(util_ad9361_divclk_reset_peripheral_aresetn),
+        .sample_valid(util_ad9361_adc_pack_packed_fifo_wr_en),
+        .dropped_sample_count(vrt49_rx_tap_dropped_sample_count));
+  system_tap_accept_0_0 tap_accept_0
+       (.accepted(tap_accept_0_accepted),
+        .clk(util_ad9361_divclk_clk_out),
+        .dropped_sample_count(vrt49_rx_tap_dropped_sample_count),
+        .resetn(util_ad9361_divclk_reset_peripheral_aresetn),
         .sample_valid(util_ad9361_adc_pack_packed_fifo_wr_en));
   system_vrt49_time_base_0_0 vrt49_time_base_0
        (.cfg_nominal_sps(axi_vrt49_framer_0_tb_nominal_sps),
@@ -100,7 +107,7 @@ module system
         .divclk_resetn(util_ad9361_divclk_reset_peripheral_aresetn),
         .pps_alt_in(hopcap_tb_pps_alt_tieoff_dout),
         .pps_in(tick_pps_gen_0_pps_out),
-        .sample_valid(util_ad9361_adc_pack_packed_fifo_wr_en),
+        .sample_valid(tap_accept_0_accepted),
         .tuple_count(vrt49_time_base_0_tuple_count),
         .tuple_lock_state(vrt49_time_base_0_tuple_lock_state),
         .tuple_missed_count(vrt49_time_base_0_tuple_missed_count),
@@ -347,3 +354,16 @@ def test_a9_fails_on_an_unpatched_top(a9_tree):
     errs = chn.check(proj, top, "adrv9361")
     assert any("ad9361_fastlock_select" in e for e in errs)
     assert any("tick_ctrl_in_iob" in e for e in errs)
+
+
+def test_a9_fails_when_the_time_base_counts_the_raw_tap_input(a9_tree):
+    # Counting the tap's input while the framer only sees accepted beats lets every tap drop
+    # shift all later stamps (seen on lablp); the time base must count tap_accept's pulses.
+    _, proj, top = a9_tree
+    _rewrite(
+        proj,
+        "        .sample_valid(tap_accept_0_accepted),",
+        "        .sample_valid(util_ad9361_adc_pack_packed_fifo_wr_en),",
+    )
+    errs = chn.check(proj, top, "adrv9361")
+    assert any("accepted beats" in e for e in errs), errs
