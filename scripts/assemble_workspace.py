@@ -209,8 +209,8 @@ A9_TOP_ASSIGN_OLD = (
     "  assign gpio_ctl[2:0] = ad9361_fastlock_select;\n"
     "  assign gpio_i[42:40] = ad9361_fastlock_select;\n"
 )
-# The AD9361 takes the FastLock profile from CTRL_IN1..3 (ADI EngineerZone thread 97390;
-# UG-570/671's "CTRL_IN0 through CTRL_IN2" is a documentation error), so Tick drives
+# The AD9361 takes the FastLock profile from CTRL_IN1..3 (measured on lablp; UG-570/671
+# say "CTRL_IN0 through CTRL_IN2"), so Tick drives
 # gpio_ctl[3:1] and CTRL_IN0 (EMIO 40) joins vrt49's PS-owned buffer in place of CTRL_IN3.
 A9_TOP_COMMENT_OLD = (
     "  // AD9361 GPIO 46:43 and 39:32 remain PS-owned.  CTRL_IN[2:0] on\n"
@@ -573,7 +573,7 @@ def a9_iob_block() -> str:
             raise AssembleError(f"Tick's CTRL_IN block lacks {needle!r}")
     return (
         "  // hopcap adrv9361: Tick gpio_out[2:0] (tick_ctrl_in) drives CTRL_IN[3:1] (gpio_ctl[3:1],\n"
-        "  // the AD9361 fast lock profile select; CTRL_IN1..3 per ADI EngineerZone 97390) from\n"
+        "  // the AD9361 fast lock profile select; CTRL_IN1..3, measured on lablp) from\n"
         "  // IOB registers on tick_clk (Tick's Z7035 block, prepare_adi_hdl_adrv9361z7035.py).\n"
         + tail
     )

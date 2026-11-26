@@ -141,7 +141,7 @@ def test_system_top_patch_drives_ctrl_in_from_tick_iob_registers():
     assert "    .tick_clk (tick_clk),\n    .tick_ctrl_in (tick_ctrl_in),\n" in new
     assert '(* IOB = "TRUE" *) reg [2:0] tick_ctrl_in_iob' in new
     assert "  always @(posedge tick_clk) begin\n    tick_ctrl_in_iob <= tick_ctrl_in;" in new
-    # The FastLock profile pins are CTRL_IN1..3 (ADI EngineerZone 97390), so Tick drives
+    # The FastLock profile pins are CTRL_IN1..3 (measured on lablp), so Tick drives
     # gpio_ctl[3:1] and CTRL_IN0 moves into vrt49's PS-owned iobuf in place of CTRL_IN3.
     assert ".dio_p (gpio_ctl[3:1]));" in new and ".dio_o (gpio_i[43:41])," in new
     assert "gpio_ctl[0],        // 40:40 / CTRL_IN0 (PS-owned; hopcap)" in new
