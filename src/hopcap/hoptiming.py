@@ -316,3 +316,32 @@ def summarize(hops: Sequence[HopTiming]) -> dict:
     for kind in ("rx-only", "tx-only", "both"):
         out[kind] = stats([h.latency_ns for h in measured if h.kind == kind])
     return out
+
+
+def steady_tone(
+    stream: SampleStream,
+    *,
+    at_ticks: int,
+    slots: Sequence[tuple[int, int]],
+    f_dds_hz: float,
+    tick_hz: int,
+    span_s: float = 1e-3,
+) -> dict:
+    """Which slot's loopback tone dominates ``span_s`` around ``at_ticks`` (no-edge check)."""
+    half = int(span_s * tick_hz / 2)
+    t, z = stream.window(at_ticks - half, at_ticks + half)
+    if len(z) < 256:
+        return {"at_ticks": at_ticks, "samples": len(z), "slot": None}
+    t_s = (t - (at_ticks - stream.base_ticks)) / tick_hz
+    powers = []
+    for rx, tx in slots:
+        f = tx - rx + f_dds_hz
+        powers.append(float(abs(np.mean(z * np.exp(-2j * np.pi * f * t_s))) ** 2))
+    order = np.argsort(powers)[::-1]
+    best, second = int(order[0]), int(order[1]) if len(order) > 1 else None
+    margin = (
+        float(10 * np.log10(powers[best] / max(powers[second], 1e-12)))
+        if second is not None
+        else None
+    )
+    return {"at_ticks": at_ticks, "samples": len(z), "slot": best, "margin_db": margin}

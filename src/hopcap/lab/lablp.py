@@ -447,6 +447,7 @@ class LablpSession:
             lookahead_hops=7,
             platform=self.plat,
             gapless=gapless,
+            keep_spool=os.environ.get("HOPCAP_KEEP_SPOOL", "0") == "1",
         )
         report = run_live(cfg, comps)
         out_d = {"disposition": report.disposition, "out_dir": str(out), "gapless": gapless}

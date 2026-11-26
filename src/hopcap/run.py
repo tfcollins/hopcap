@@ -63,6 +63,7 @@ class RunConfig:
     # visible in the capture. No Context packets are stamped; hop landing is measured from the
     # loopback tone instead (hopcap.hoptiming).
     gapless: bool = False
+    keep_spool: bool = True  # gapless: False deletes the raw spool once it is analysed
 
 
 @dataclass
@@ -427,6 +428,12 @@ def run_live(cfg: RunConfig, c: Components) -> RunReport:
         epoch_base=hc_before.epoch,
         expected_peer=cfg.expected_peer,
         freq_tolerance_hz=cfg.freq_tolerance_hz,
+        # loss before the run shows as one packet-count skip at the first data packet; only
+        # forgiven when the tap/framer loss counters did not move during the run
+        pre_run_loss_mark=framer_mod.delta(framer_before, framer_after).get(
+            "v49_tx_dropped_packets", 1
+        )
+        == 0,
     )
     q32 = (
         tb_armed["after_arm"]["ps_per_sample_q32"]
@@ -562,6 +569,18 @@ def _finish_gapless(
             )
         prev = e.slot
     summary = hoptiming.summarize(hops)
+    # No hop without an edge: half-way to the next edge the tone is still this slot's.
+    steady = []
+    for k, e in enumerate(edges):
+        if not e.executed:
+            continue
+        nxt = edges[k + 1].requested_ticks if k + 1 < len(edges) else None
+        mid = (e.requested_ticks + nxt) // 2 if nxt else e.requested_ticks + int(0.1 * tick_hz)
+        st = hoptiming.steady_tone(
+            stream, at_ticks=mid, slots=slots, f_dds_hz=f_dds, tick_hz=tick_hz
+        )
+        st.update({"index": e.index, "expected_slot": e.slot, "ok": st["slot"] == e.slot})
+        steady.append(st)
     late = tick_after["late_count"] - tick_info["late_count"]
     over = tick_after["overflow_count"] - tick_info["overflow_count"]
     # Completion-free edges are only trustworthy if Tick dropped none (LATE_DROP) and the
@@ -571,6 +590,7 @@ def _finish_gapless(
         and len(hops) == len(edges)
         and late == 0
         and over == 0
+        and all(st["ok"] for st in steady)
     )
     manifest = {
         "schema": "hopcap-gapless-1",
@@ -584,6 +604,7 @@ def _finish_gapless(
         "edges": [vars(e) for e in edges],
         "hop_timing": [h.as_dict() for h in hops],
         "hop_timing_summary": summary,
+        "steady_tone": steady,
         "samples": len(stream.iq),
         "tick": {
             **tick_info,
@@ -614,6 +635,8 @@ def _finish_gapless(
         },
     }
     (out_dir / "manifest.json").write_text(json.dumps(manifest, indent=2, default=str) + "\n")
+    if not cfg.keep_spool:  # ~1.7 GB per gapless run; the manifest holds the measurements
+        (out_dir / "datagrams.spool").unlink(missing_ok=True)
     write_sums(out_dir)
     a = summary.get("all", {})
     c.log(

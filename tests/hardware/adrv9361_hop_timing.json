@@ -1,0 +1,6 @@
+{
+  "image": "pending: pinned from the first tap_accept bitstream's lablp runs",
+  "latency_ns": 0,
+  "tolerance_ns": 5000,
+  "note": "Hop landing latency on lablp: loopback-tone crossing in the gapless vrt49 capture minus the scheduled Tick tick (CTRL_IN IOB register, AD9361 pin sampling, FastLock synth switch, RX digital path). Pinned per image like the ZU11EG -7 frame constant; tolerance covers synth settling variation."
+}
