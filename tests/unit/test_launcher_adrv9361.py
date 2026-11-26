@@ -122,3 +122,22 @@ def test_artifact_paths_are_resolved_before_adi_lg(tmp_path, monkeypatch):
     assert env["HOPCAP_PLAN"] == str(tmp_path / "p.json")
     assert env["HOPCAP_TICK_MODULE"] == str(Path("~/t.ko").expanduser())
     assert env["HOPCAP_VRT49_MODULE"] == "/abs/v.ko" and env["HOPCAP_OUT"] == str(tmp_path / "ev")
+
+
+def test_a_place_taken_by_the_next_job_counts_as_released():
+    header = launcher.place_header(SHOW)
+    ours = "2026-11-25 22:40:00.000000"
+    held = header.replace("acquired: None", "acquired: nemo/tcollins")
+    import re as _re
+
+    def at(h, stamp):
+        h = _re.sub(r"\n  changed: .*", "", h)
+        return h.rstrip("\n") + f"\n  changed: {stamp}\n"
+
+    # still ours: a leak
+    assert not launcher.released_by_us(at(held, ours), ours)
+    # someone acquired it after our release: the stamp moved on
+    assert launcher.released_by_us(at(held, "2026-11-25 23:10:31.000000"), ours)
+    # we never saw our own acquisition: only "acquired: None" passes
+    assert not launcher.released_by_us(at(held, "2026-11-25 23:10:31.000000"), None)
+    assert launcher.released_by_us(header, None)

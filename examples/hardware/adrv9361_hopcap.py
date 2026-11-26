@@ -27,6 +27,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import threading
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -119,6 +120,43 @@ def check_place(header: str) -> None:
 
 def released(header: str) -> bool:
     return any(line.strip() == "acquired: None" for line in header.splitlines())
+
+
+def changed(header: str) -> str | None:
+    for line in header.splitlines():
+        if line.strip().startswith("changed:"):
+            return line.split(":", 1)[1].strip()
+    return None
+
+
+def released_by_us(after: str, ours: str | None) -> bool:
+    """The session let lablp go. Another job (tick's lablp HIL also runs as this user on this
+    host) may acquire it the moment we release it; that acquisition moves the place's
+    `changed` stamp past the one our own acquisition set, so only a place still acquired
+    with our stamp is a leak."""
+    if released(after):
+        return True
+    return ours is not None and changed(after) not in (None, ours)
+
+
+class AcquireWatch(threading.Thread):
+    """Records the place's `changed` stamp the first time it shows acquired (by our session)."""
+
+    def __init__(self, env, before: str, period_s: float = 5.0):
+        super().__init__(daemon=True)
+        self.env, self.before, self.period_s = env, changed(before), period_s
+        self.stamp: str | None = None
+        self.done = threading.Event()
+
+    def run(self) -> None:
+        while not self.done.wait(self.period_s):
+            try:
+                h = place_header(labgrid_show(self.env))
+            except Exception:
+                continue
+            if not released(h) and changed(h) != self.before:
+                self.stamp = changed(h)
+                return
 
 
 def resolve_paths(env) -> None:
@@ -219,10 +257,13 @@ def execute(args) -> int:
         no_run=os.environ.get("HOPCAP_LABLP_NO_RUN") == "1",
         rx_cpu=os.environ.get("HOPCAP_RX_CPU"),
     )
+    watch = AcquireWatch(env, header)
+    watch.start()
     returncode = stream_filtered(request, env, evidence / "labgrid-boot.log")
+    watch.done.set()
     after = place_header(labgrid_show(env))
     (evidence / "labgrid-release.log").write_text(after)
-    if not released(after):
+    if not released_by_us(after, watch.stamp):
         raise ValueError(f"place {PLACE} is still acquired after adi-lg returned")
     session = evidence / "session.json"
     if not session.exists():
