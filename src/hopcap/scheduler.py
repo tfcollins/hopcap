@@ -38,8 +38,14 @@ class TickSession:
         sleep: Callable[[float], None] = time.sleep,
         completion_timeout_s: float = 5.0,
         bits: GpioBitMap = ZU11EG_BITS,
+        report_completion: bool = True,
     ):
         self.bits = bits
+        # False: rises carry no REPORT_COMPLETION (see descriptors_for_edge), so nothing on
+        # the host can hold a hop back; edges are paced by Tick time and each is recorded as
+        # SCHEDULED at its requested tick. The caller proves they fired from late/overflow
+        # counters and from the capture.
+        self.report_completion = report_completion
         self.read = read_attr
         self.write = write_attr
         self.lookahead = lookahead_hops
@@ -118,7 +124,9 @@ class TickSession:
         def submit_up_to(k: int) -> None:
             nonlocal submitted
             while submitted < len(edges) and submitted <= k:
-                for d in descriptors_for_edge(edges[submitted], self.bits):
+                for d in descriptors_for_edge(
+                    edges[submitted], self.bits, report_completion=self.report_completion
+                ):
                     self.submit(d)
                 submitted += 1
 
@@ -128,6 +136,34 @@ class TickSession:
             if pipeline is not None:
                 pipeline.stage(edges[0].stage_before_hz)
         submit_up_to(lookahead - 1)
+        if not self.report_completion:
+            if pipeline is not None or any(e.stage_before_hz is not None for e in edges):
+                raise SchedulerError("completion-free runs cannot stage (FastLock only)")
+            for k, e in enumerate(edges):
+                deadline = (
+                    time.monotonic()
+                    + self.completion_timeout_s
+                    + ((e.rise_ticks - self.now()) / self.read("time_tick_hz"))
+                )
+                while self.now() <= e.fall_ticks:
+                    if time.monotonic() >= deadline:
+                        raise SchedulerError(f"edge {e.index} never came due")
+                    self.sleep(self.poll_s)
+                results.append(
+                    EdgeResult(
+                        index=e.index,
+                        slot=e.slot,
+                        commits_hz=e.commits_hz,
+                        requested_ticks=e.rise_ticks,
+                        executed_ticks=e.rise_ticks,
+                        status="SCHEDULED",
+                        readback_hz=None,
+                        stage_late=False,
+                        host_mono_ns=time.monotonic_ns(),
+                    )
+                )
+                submit_up_to(k + lookahead)
+            return results
         for k, e in enumerate(edges):
             seq = RISE_SEQ_BASE + e.index
             status, executed = wait_for_completion(

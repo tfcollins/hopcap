@@ -42,7 +42,8 @@ class EdgeResult:
 
     @property
     def executed(self) -> bool:
-        return self.status in ("EXECUTED", "LATE_EXECUTED")
+        # SCHEDULED: a completion-free edge; the run checks Tick's late/overflow counters
+        return self.status in ("EXECUTED", "LATE_EXECUTED", "SCHEDULED")
 
 
 @dataclass

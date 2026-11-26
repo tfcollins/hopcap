@@ -264,6 +264,7 @@ def run_live(cfg: RunConfig, c: Components) -> RunReport:
         lookahead_hops=cfg.lookahead_hops,
         sleep=c.sleep,
         bits=plat.bits,
+        report_completion=not fastlock,
     )
     tick_info = tick.probe()
     tick_hz = tick_info["time_tick_hz"]
@@ -561,7 +562,16 @@ def _finish_gapless(
             )
         prev = e.slot
     summary = hoptiming.summarize(hops)
-    complete = all(h.latency_ns is not None for h in hops) and len(hops) == len(edges)
+    late = tick_after["late_count"] - tick_info["late_count"]
+    over = tick_after["overflow_count"] - tick_info["overflow_count"]
+    # Completion-free edges are only trustworthy if Tick dropped none (LATE_DROP) and the
+    # queue never overflowed; the capture then shows every one landing.
+    complete = (
+        all(h.latency_ns is not None for h in hops)
+        and len(hops) == len(edges)
+        and late == 0
+        and over == 0
+    )
     manifest = {
         "schema": "hopcap-gapless-1",
         "mode": "gapless",

@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import statistics
 from collections.abc import Iterable, Sequence
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 
 import numpy as np
 
@@ -95,6 +95,7 @@ class SampleStream:
     ticks: np.ndarray  # float64 Tick time of each sample minus base_ticks
     iq: np.ndarray  # complex128
     base_ticks: int = 0
+    periods: dict = field(default_factory=dict)  # second -> measured beats
 
     @classmethod
     def from_records(
@@ -106,11 +107,20 @@ class SampleStream:
         beats_per_pps: int,
         expected_peer: tuple[str, int] | None = None,
     ) -> SampleStream:
-        t_parts: list[np.ndarray] = []
-        z_parts: list[np.ndarray] = []
-        ticks_per_beat = tick_hz / beats_per_pps
-        expect: float | None = None  # Tick time (minus base) the next packet should start at
-        base: int | None = None
+        """Map every sample to Tick time using each second's *measured* length.
+
+        The framer stamps with the nominal sample period, but the AD9361 sample clock and
+        the Tick clock (which makes the PPS) are independent oscillators, so a second holds
+        a few tens of samples more or fewer than nominal and it varies second to second. In
+        a continuous stream every PPS crossing is visible: second S's length is the beat
+        count from its first sample to the next second's first sample. A sample k beats
+        after edge S is at Tick ``S * tick_hz + k * tick_hz / P_S``; ``beats_per_pps`` is
+        only the fallback for a second whose length the stream does not show.
+        """
+        nominal = ps_per_sample_q32 / 2**32 / PS_PER_SEC  # seconds per beat (stamp grid)
+        pkts: list[tuple[int, int, np.ndarray]] = []  # (edge second S, beats k after it, iq)
+        expect: float | None = None  # seconds since the first edge, nominal grid
+        s0: int | None = None
         for r in records:
             if expected_peer and (r.peer_ip, r.peer_port) != expected_peer:
                 continue
@@ -123,35 +133,53 @@ class SampleStream:
             iq = p.iq()
             if not len(iq):
                 continue
-            cands = stamp_candidates(
-                p.int_secs,
-                p.frac_ps,
-                tick_hz=tick_hz,
-                ps_per_sample_q32=ps_per_sample_q32,
-                ticks_per_beat=ticks_per_beat,
-            )
+            cands = []
+            try:
+                cands.append((p.int_secs, beats_from_fraction(p.frac_ps, ps_per_sample_q32)))
+            except TimeBaseError:
+                pass
+            try:
+                m = beats_from_fraction(PS_PER_SEC - p.frac_ps, ps_per_sample_q32)
+                cands.append((p.int_secs + 1, -m))
+            except TimeBaseError:
+                pass
             if not cands:
                 raise TimeBaseError(
                     f"stamp ({p.int_secs}, {p.frac_ps} ps) is on neither framer grid for "
                     f"ps_per_sample_q32 {ps_per_sample_q32}"
                 )
-            if base is None:
-                base = cands[0][0]
-            rel = [(edge - base) + off for edge, off in cands]
-            t0 = (
-                rel[0]
-                if expect is None or len(rel) == 1
-                else min(rel, key=lambda c: abs(c - expect))
+            if s0 is None:
+                s0 = cands[0][0]
+            pos = [(S - s0) + k * nominal for S, k in cands]
+            pick = (
+                0
+                if expect is None or len(cands) == 1
+                else min(range(len(cands)), key=lambda c: abs(pos[c] - expect))
             )
-            expect = t0 + len(iq) * ticks_per_beat
-            t_parts.append(t0 + np.arange(len(iq)) * ticks_per_beat)
-            z_parts.append(iq[:, 0].astype(np.float64) + 1j * iq[:, 1].astype(np.float64))
-        if not t_parts:
+            S, k = cands[pick]
+            pkts.append((S, k, iq))
+            expect = pos[pick] + len(iq) * nominal
+        if not pkts:
             return cls(np.zeros(0), np.zeros(0, dtype=complex))
+        # second lengths from consecutive packets across each PPS crossing
+        periods: dict[int, int] = {}
+        for (sa, ka, za), (sb, kb, _) in zip(pkts, pkts[1:]):
+            if sb == sa + 1:
+                periods[sa] = ka + len(za) - kb
+        t_parts, z_parts = [], []
+        for S, k, iq in pkts:
+            sec = S - 1 if k < 0 else S  # borrow: k beats before edge S, inside second S-1
+            per = periods.get(sec, beats_per_pps)
+            tpb = tick_hz / per
+            t0 = (S - s0) * tick_hz + k * tpb
+            t_parts.append(t0 + np.arange(len(iq)) * tpb)
+            z_parts.append(iq[:, 0].astype(np.float64) + 1j * iq[:, 1].astype(np.float64))
         ticks = np.concatenate(t_parts)
         iq = np.concatenate(z_parts)
         order = np.argsort(ticks, kind="stable")
-        return cls(ticks[order], iq[order], base_ticks=int(base))
+        out = cls(ticks[order], iq[order], base_ticks=int(s0) * tick_hz)
+        out.periods = periods
+        return out
 
     def window(self, start: int | float, stop: int | float) -> tuple[np.ndarray, np.ndarray]:
         """Samples with absolute Tick time in [start, stop); times returned relative to base."""

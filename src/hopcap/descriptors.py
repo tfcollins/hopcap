@@ -36,15 +36,23 @@ def gpio_value(slot: int, trigger: bool, bits: GpioBitMap = ZU11EG_BITS) -> int:
 
 
 def descriptors_for_edge(
-    edge: Edge, bits: GpioBitMap = ZU11EG_BITS
+    edge: Edge, bits: GpioBitMap = ZU11EG_BITS, *, report_completion: bool = True
 ) -> tuple[CommandDescriptor, CommandDescriptor]:
+    """Rise and fall GPIO_WRITEs for one hop.
+
+    ``report_completion=False`` leaves REPORT_COMPLETION off the rise. Tick's completion
+    window holds one record: a due command that reports completion waits until software has
+    acknowledged the previous record, and Tick then still reports it EXECUTED at its
+    requested tick. Over a slow control path that holds hops back by hundreds of ms (seen on
+    lablp), so FastLock runs schedule without completions and prove timing from the capture.
+    """
     rise_mask, rise_value = bits.rise(edge.slot)
     fall_mask, fall_value = bits.fall()
     rise = CommandDescriptor(
         command_id=CommandID.GPIO_WRITE,
         target_id=TargetFamily.GPIO,
         timestamp_ticks=edge.rise_ticks,
-        flags=Flag.REPORT_COMPLETION | Flag.LATE_DROP,
+        flags=(Flag.REPORT_COMPLETION | Flag.LATE_DROP) if report_completion else Flag.LATE_DROP,
         sequence_id=RISE_SEQ_BASE + edge.index,
         args=(rise_mask, rise_value, 0, 0),
     )
