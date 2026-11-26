@@ -17,6 +17,8 @@ three CTRL_IN pins on the same Tick edge.
 
 from __future__ import annotations
 
+import contextlib
+import itertools
 import statistics
 from collections.abc import Iterable, Sequence
 from dataclasses import asdict, dataclass, field
@@ -41,12 +43,10 @@ def stamp_candidates(
     beats (vrt49 axi_vrt49_framer "borrow" path) as ``(sec - 1, 1e12 - floor(m * q / 2^32))``.
     Values on both grids return both readings; the caller disambiguates by continuity."""
     out = []
-    try:
+    with contextlib.suppress(TimeBaseError):
         out.append(
             (sec * tick_hz, beats_from_fraction(frac_ps, ps_per_sample_q32) * ticks_per_beat)
         )
-    except TimeBaseError:
-        pass
     try:
         m = beats_from_fraction(PS_PER_SEC - frac_ps, ps_per_sample_q32)
         out.append(((sec + 1) * tick_hz, -m * ticks_per_beat))
@@ -137,10 +137,8 @@ class SampleStream:
             if not len(iq):
                 continue
             cands = []
-            try:
+            with contextlib.suppress(TimeBaseError):
                 cands.append((p.int_secs, beats_from_fraction(p.frac_ps, ps_per_sample_q32)))
-            except TimeBaseError:
-                pass
             try:
                 m = beats_from_fraction(PS_PER_SEC - p.frac_ps, ps_per_sample_q32)
                 cands.append((p.int_secs + 1, -m))
@@ -166,7 +164,7 @@ class SampleStream:
             return cls(np.zeros(0), np.zeros(0, dtype=complex))
         # second lengths from consecutive packets across each PPS crossing
         periods: dict[int, int] = {}
-        for (sa, ka, za), (sb, kb, _) in zip(pkts, pkts[1:]):
+        for (sa, ka, za), (sb, kb, _) in itertools.pairwise(pkts):
             if sb == sa + 1:
                 periods[sa] = ka + len(za) - kb
         t_parts, z_parts = [], []
