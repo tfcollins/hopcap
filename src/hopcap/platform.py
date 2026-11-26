@@ -9,7 +9,7 @@ Two platforms share the host code:
 * ``adrv9361`` — ADRV9361-Z7035 on place ``lablp`` (spec
   ``docs/superpowers/specs/2026-11-25-adrv9361z7035-hop-design.md``). Tick runs at **50 MHz**
   (it misses 100 MHz on the Z7035 -2L), the controller at 100 MHz. Tick ``gpio_out[2:0]`` drives
-  AD9361 CTRL_IN[2:0] (FastLock profile k for RX and TX together) and ``gpio_out[3]`` is the
+  AD9361 CTRL_IN[3:1] (FastLock profile k for RX and TX together) and ``gpio_out[3]`` is the
   event; nothing is staged.
 
 Units: plans are written in microseconds. Tick ticks = µs * TickHz / 1e6 (:func:`us_to_ticks`);
@@ -99,7 +99,7 @@ class GpioBitMap:
 
 # ZU11EG: gpio_out[0] = TAL_GPIO_0 trigger + controller event, gpio_out[3:1] = slot.
 ZU11EG_BITS = GpioBitMap("zu11eg", event_mask=0x1, slot_shift=1)
-# ADRV9361: gpio_out[2:0] = AD9361 CTRL_IN[2:0] (FastLock profile), gpio_out[3] = event. The BD
+# ADRV9361: gpio_out[2:0] = AD9361 CTRL_IN[3:1] (FastLock profile), gpio_out[3] = event. The BD
 # feeds the controller {gpio_out[2:0], gpio_out[3]}, so it still sees event = bit 0.
 ADRV9361_BITS = GpioBitMap("adrv9361", event_mask=0x8, slot_shift=0)
 

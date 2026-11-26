@@ -5,7 +5,7 @@ The bit layout on Tick ``gpio_out`` is the platform's :class:`hopcap.platform.Gp
 
 * ZU11EG (default): bit 0 is the FHM trigger (wired to TAL_GPIO_0 and to the hop controller's
   event input), bits 3:1 carry the slot index for the hop controller.
-* ADRV9361: bits 2:0 are AD9361 CTRL_IN[2:0] (the FastLock profile, which is also the slot) and
+* ADRV9361: bits 2:0 are AD9361 CTRL_IN[3:1] (the FastLock profile, which is also the slot) and
   bit 3 is the event: rise ``mask 0xF value 0x8|slot``, fall ``mask 0x8 value 0``.
 
 Each edge is two descriptors: a rising edge that writes event+slot and reports a completion,

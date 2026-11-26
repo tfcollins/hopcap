@@ -55,7 +55,7 @@ cmake -S third_party/vrt49 -B build/vrt49 -DVRT49_BUILD_TOOLS=OFF -DVRT49_BUILD_
   so its host tooling carries over. New registers start at 0x18.
 - The controller never generates the hop. ZU11EG: Tick `gpio_out[0]` drives TAL_GPIO_0 directly
   (the validated path) and is also the controller's event; `gpio_out[3:1]` is the slot index.
-  ADRV9361 (`adrv9361`): Tick `gpio_out[2:0]` drives AD9361 CTRL_IN[2:0] from IOB registers on the
+  ADRV9361 (`adrv9361`): Tick `gpio_out[2:0]` drives AD9361 CTRL_IN[3:1] from IOB registers on the
   tick clock (FastLock profile k for RX and TX together) and `gpio_out[3]` is the event; the BD
   feeds the controller `{gpio_out[2:0], gpio_out[3]}` through `tick_gpio_sync`, so the controller
   still sees event = bit 0, slot = bits 3:1.

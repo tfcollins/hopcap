@@ -122,7 +122,7 @@ if {[llength $a9_divclk] == 0 || [llength $a9_sysclk] == 0} {
     $sys_p
 }
 
-# --- CTRL_IN[2:0] in IOB output registers --------------------------------------------------
+# --- CTRL_IN[3:1] in IOB output registers --------------------------------------------------
 set a9_iob [a9_cells {*tick_ctrl_in_iob_reg*}]
 if {[llength $a9_iob] != 3} {
   a9_note FAIL "CTRL_IN: expected 3 tick_ctrl_in_iob_reg cells, found [llength $a9_iob]"

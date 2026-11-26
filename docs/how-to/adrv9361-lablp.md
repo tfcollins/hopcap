@@ -1,7 +1,7 @@
 # Run on the ADRV9361-Z7035 (lablp)
 
 The `adrv9361` platform hops RX **and** TX together through AD9361 FastLock pin select: Tick
-`gpio_out[2:0]` drives CTRL_IN[2:0], so one 3-bit code selects RX profile k and TX profile k on a
+`gpio_out[2:0]` drives CTRL_IN[3:1], so one 3-bit code selects RX profile k and TX profile k on a
 Tick tick. Design: `docs/superpowers/specs/2026-11-25-adrv9361z7035-hop-design.md`. This page is
 the host side: artifacts, the board session on labgrid place `lablp`, and what each step checks.
 Verify lab facts against `~/dev/infra/HOSTS.md` before use.

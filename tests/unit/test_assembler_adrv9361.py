@@ -141,10 +141,12 @@ def test_system_top_patch_drives_ctrl_in_from_tick_iob_registers():
     assert "    .tick_clk (tick_clk),\n    .tick_ctrl_in (tick_ctrl_in),\n" in new
     assert '(* IOB = "TRUE" *) reg [2:0] tick_ctrl_in_iob' in new
     assert "  always @(posedge tick_clk) begin\n    tick_ctrl_in_iob <= tick_ctrl_in;" in new
-    assert ".dio_p (gpio_ctl[2:0]));" in new and ".dio_o (gpio_i[42:40])," in new
-    # CTRL_IN3 and the status pins keep vrt49's PS-owned iobuf
-    assert "gpio_ctl[3],        // 43:43 / CTRL_IN3 (PS-owned)" in new
-    assert ".dio_o ({gpio_i[46:43], gpio_i[39:32]})," in new
+    # The FastLock profile pins are CTRL_IN1..3 (ADI EngineerZone 97390), so Tick drives
+    # gpio_ctl[3:1] and CTRL_IN0 moves into vrt49's PS-owned iobuf in place of CTRL_IN3.
+    assert ".dio_p (gpio_ctl[3:1]));" in new and ".dio_o (gpio_i[43:41])," in new
+    assert "gpio_ctl[0],        // 40:40 / CTRL_IN0 (PS-owned; hopcap)" in new
+    assert ".dio_o ({gpio_i[46:44], gpio_i[40], gpio_i[39:32]})," in new
+    assert "gpio_ctl[3],        // 43:43" not in new and "gpio_ctl[2:0]" not in new
     assert aw.patch_a9_system_top(new) == new
 
 
@@ -155,7 +157,7 @@ def test_system_top_iob_block_is_ticks_own():
     assert tail in new
     # Tick's XDC packs exactly the register this block declares
     assert "tick_ctrl_in_iob_reg" in TICK_XDC
-    assert "set_false_path -to [get_ports {gpio_ctl[0] gpio_ctl[1] gpio_ctl[2]}]" in TICK_XDC
+    assert "set_false_path -to [get_ports {gpio_ctl[1] gpio_ctl[2] gpio_ctl[3]}]" in TICK_XDC
 
 
 def test_system_top_patch_refuses_changed_anchors():

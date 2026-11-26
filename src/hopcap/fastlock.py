@@ -2,7 +2,7 @@
 """AD9361 FastLock bank for the ADRV9361 hop (replaces the Talise stager on that platform).
 
 Spec decision 1 (``docs/superpowers/specs/2026-11-25-adrv9361z7035-hop-design.md``): Tick
-``gpio_out[2:0]`` drives CTRL_IN[2:0]; with Profile Pin Select set in both 0x25A (Rx Fast Lock
+``gpio_out[2:0]`` drives CTRL_IN[3:1]; with Profile Pin Select set in both 0x25A (Rx Fast Lock
 Setup) and 0x29A (Tx Fast Lock Setup), one 3-bit code selects RX profile k and TX profile k
 together. Sequence (vrt49 ``scripts/adrv9361_tick_hop.py``, extended to TX):
 
@@ -165,7 +165,7 @@ class FastLockBank:
         return self.record["loaded"]
 
     def enable_pin_select(self) -> dict:
-        """D1|D0 in 0x25A and 0x29A: CTRL_IN[2:0] selects RX and TX profile together. Call only
+        """D1|D0 in 0x25A and 0x29A: CTRL_IN[3:1] selects RX and TX profile together. Call only
         after Tick has parked CTRL_IN at code 0 (profile 0, the one just recalled)."""
         if not self.loaded:
             raise FastLockError("FastLock bank not loaded: store and recall before pin select")

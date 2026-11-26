@@ -13,7 +13,7 @@
 #
 #   Tick  third_party/tick's Z7035 fragment: module reference at 0x44AA0000, 50 MHz
 #         tick_clk from FCLK0 (clk_wiz) behind an async AXI-Lite converter, IRQ ps-14,
-#         BD ports tick_clk / tick_ctrl_in[2:0] (system_top.v registers CTRL_IN[2:0] in IOBs).
+#         BD ports tick_clk / tick_ctrl_in[2:0] (system_top.v registers CTRL_IN[3:1] in IOBs).
 #         Tick at 50 MHz is required: with retained-slot repeats the scheduler misses
 #         100 MHz on the Z7035 -2L (tick docs/adrv9361z7035-tick.md).
 #   HOP2  vrt49_fhm_hop_ctrl_0 at 0x44AB0000 on sys_cpu_clk (100 MHz).  It gates and stamps;

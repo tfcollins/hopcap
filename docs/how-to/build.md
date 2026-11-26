@@ -71,7 +71,7 @@ CTRL_IN XDC from `third_party/tick`. Its anchored edits:
 | `system_bd.tcl` | vrt49's own Tick (vendored, 100 MHz) + HOP1 block is cut (their IPs are not built); `source system_bd_adrv9361_hop.tcl` before `validate_bd_design` |
 | `Makefile` | `LIB_DEPS` without `tick_vendor` / `vrt49_ad9361_hop_ctrl`, with `vrt49_time_base vrt49_fhm_hop_ctrl tick_pps_gen` |
 | `system_project.tcl` | Tick's CTRL_IN XDC, `system_adrv9361_hop_cdc.tcl` as a late implementation-only constraint script, `check_adrv9361_hop.tcl` after vrt49's final timing gates |
-| `system_top.v` | CTRL_IN[2:0] from Tick's IOB registers on `tick_clk` (read back on EMIO 42:40), `tick_clk` / `tick_ctrl_in` wrapper ports instead of `ad9361_fastlock_select` |
+| `system_top.v` | CTRL_IN[3:1] from Tick's IOB registers on `tick_clk` (read back on EMIO 43:41), `tick_clk` / `tick_ctrl_in` wrapper ports instead of `ad9361_fastlock_select` |
 
 `hdl/system_bd_adrv9361_hop.tcl` sources Tick's fragment (scheduler at 0x44AA0000, 50 MHz from
 FCLK0, IRQ ps-14), puts HOP2 at 0x44AB0000 on `sys_cpu_clk` fed `{gpio_out[2:0], gpio_out[3]}`

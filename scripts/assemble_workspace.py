@@ -43,8 +43,8 @@ Profiles (``--profile``, recorded in MANIFEST.json with the build environment it
              * anchored edits: system_project.tcl (CTRL_IN XDC, CDC script, post-route gate),
                Makefile (LIB_DEPS without tick_vendor / vrt49_ad9361_hop_ctrl), system_bd.tcl
                (vrt49's Tick + HOP1 block removed, the hop fragment sourced before
-               validate_bd_design) and system_top.v (CTRL_IN[2:0] from IOB registers on
-               tick_clk, read back on EMIO 42:40; tick_clk / tick_ctrl_in wrapper ports).
+               validate_bd_design) and system_top.v (CTRL_IN[3:1] from IOB registers on
+               tick_clk, read back on EMIO 43:41; CTRL_IN0 to the PS buffer; tick_clk / tick_ctrl_in wrapper ports).
 
 Usage:
   assemble_workspace.py --build-root build/ws [--port sfp|qsfp] [--profile default|timed-dma|adrv9361]
@@ -208,6 +208,36 @@ A9_TOP_WIRE_NEW = "  wire            tick_clk;\n  wire    [ 2:0]  tick_ctrl_in;\
 A9_TOP_ASSIGN_OLD = (
     "  assign gpio_ctl[2:0] = ad9361_fastlock_select;\n"
     "  assign gpio_i[42:40] = ad9361_fastlock_select;\n"
+)
+# The AD9361 takes the FastLock profile from CTRL_IN1..3 (ADI EngineerZone thread 97390;
+# UG-570/671's "CTRL_IN0 through CTRL_IN2" is a documentation error), so Tick drives
+# gpio_ctl[3:1] and CTRL_IN0 (EMIO 40) joins vrt49's PS-owned buffer in place of CTRL_IN3.
+A9_TOP_COMMENT_OLD = (
+    "  // AD9361 GPIO 46:43 and 39:32 remain PS-owned.  CTRL_IN[2:0] on\n"
+    "  // gpio_ctl[2:0] are exclusively driven by the timed fastlock selector;\n"
+    "  // CTRL_IN3/gpio_ctl[3] remains under the stock PS GPIO policy.\n"
+)
+A9_TOP_COMMENT_NEW = (
+    "  // hopcap adrv9361: AD9361 GPIO 46:44, 40 (CTRL_IN0) and 39:32 remain PS-owned;\n"
+    "  // CTRL_IN[3:1] (the FastLock profile pins) are driven by Tick below.\n"
+)
+A9_TOP_PS_IOBUF_OLD = (
+    "    .dio_t ({gpio_t[46:43], gpio_t[39:32]}),\n"
+    "    .dio_i ({gpio_o[46:43], gpio_o[39:32]}),\n"
+    "    .dio_o ({gpio_i[46:43], gpio_i[39:32]}),\n"
+    "    .dio_p ({ gpio_resetb,        // 46:46\n"
+    "              gpio_sync,          // 45:45\n"
+    "              gpio_en_agc,        // 44:44\n"
+    "              gpio_ctl[3],        // 43:43 / CTRL_IN3 (PS-owned)\n"
+)
+A9_TOP_PS_IOBUF_NEW = (
+    "    .dio_t ({gpio_t[46:44], gpio_t[40], gpio_t[39:32]}),\n"
+    "    .dio_i ({gpio_o[46:44], gpio_o[40], gpio_o[39:32]}),\n"
+    "    .dio_o ({gpio_i[46:44], gpio_i[40], gpio_i[39:32]}),\n"
+    "    .dio_p ({ gpio_resetb,        // 46:46\n"
+    "              gpio_sync,          // 45:45\n"
+    "              gpio_en_agc,        // 44:44\n"
+    "              gpio_ctl[0],        // 40:40 / CTRL_IN0 (PS-owned; hopcap)\n"
 )
 A9_TOP_WRAPPER_OLD = "    .ad9361_fastlock_select (ad9361_fastlock_select),\n"
 A9_TOP_WRAPPER_NEW = "    .tick_clk (tick_clk),\n    .tick_ctrl_in (tick_ctrl_in),\n"
@@ -538,13 +568,14 @@ def a9_iob_block() -> str:
             "register block this profile reuses"
         )
     tail = new[new.index(A9_TICK_IOB_HEAD) :]
-    for needle in ("tick_ctrl_in_iob <= tick_ctrl_in;", ".dio_p (gpio_ctl[2:0])", "gpio_i[42:40]"):
+    for needle in ("tick_ctrl_in_iob <= tick_ctrl_in;", ".dio_p (gpio_ctl[3:1])", "gpio_i[43:41]"):
         if needle not in tail:
             raise AssembleError(f"Tick's CTRL_IN block lacks {needle!r}")
     return (
-        "  // hopcap adrv9361: Tick gpio_out[2:0] (tick_ctrl_in) drives CTRL_IN[2:0] (gpio_ctl[2:0],\n"
-        "  // the AD9361 fast lock profile select, UG-671 0x25A/0x29A D1) from IOB registers on\n"
-        "  // tick_clk (Tick's Z7035 block, prepare_adi_hdl_adrv9361z7035.py).\n" + tail
+        "  // hopcap adrv9361: Tick gpio_out[2:0] (tick_ctrl_in) drives CTRL_IN[3:1] (gpio_ctl[3:1],\n"
+        "  // the AD9361 fast lock profile select; CTRL_IN1..3 per ADI EngineerZone 97390) from\n"
+        "  // IOB registers on tick_clk (Tick's Z7035 block, prepare_adi_hdl_adrv9361z7035.py).\n"
+        + tail
     )
 
 
@@ -553,6 +584,8 @@ def patch_a9_system_top(text: str) -> str:
     if A9_TOP_MARKER in text:
         return text
     text = _replace_once(text, A9_TOP_WIRE_OLD, A9_TOP_WIRE_NEW, where)
+    text = _replace_once(text, A9_TOP_COMMENT_OLD, A9_TOP_COMMENT_NEW, where)
+    text = _replace_once(text, A9_TOP_PS_IOBUF_OLD, A9_TOP_PS_IOBUF_NEW, where)
     text = _replace_once(text, A9_TOP_ASSIGN_OLD, a9_iob_block(), where)
     text = _replace_once(text, A9_TOP_WRAPPER_OLD, A9_TOP_WRAPPER_NEW, where)
     if "ad9361_fastlock_select" in text:

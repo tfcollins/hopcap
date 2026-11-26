@@ -96,12 +96,18 @@ REQUIRED_TOP_A9 = (
     "tick_ctrl_in_iob <= tick_ctrl_in;",
     "always @(posedge tick_clk) begin",
     ".dio_i (tick_ctrl_in_iob),",
-    ".dio_o (gpio_i[42:40]),",
-    ".dio_p (gpio_ctl[2:0]));",
+    ".dio_o (gpio_i[43:41]),",
+    ".dio_p (gpio_ctl[3:1]));",
+    "gpio_ctl[0],        // 40:40 / CTRL_IN0 (PS-owned; hopcap)",
     ".tick_clk (tick_clk),",
     ".tick_ctrl_in (tick_ctrl_in),",
 )
-FORBIDDEN_TOP_A9 = ("ad9361_fastlock_select", "assign gpio_ctl[2:0]")
+FORBIDDEN_TOP_A9 = (
+    "ad9361_fastlock_select",
+    "assign gpio_ctl[2:0]",
+    ".dio_p (gpio_ctl[2:0]))",
+    "gpio_ctl[3],        // 43:43",
+)
 # cell -> (wrapped module, {parameter: value}); module references must be module_ref VLNVs.
 A9_WRAPPERS = {
     "axi_timed_command_scheduler_0": (
@@ -448,7 +454,7 @@ def check_adrv9361(netlist: str) -> list[str]:
         if "vrt49_ad9361_hop_ctrl" in kind or name in ("tick_scheduler_0", "tick_pps_tieoff"):
             errors.append(f"{name} ({kind}) must not be in the adrv9361 design")
 
-    # CTRL_IN[2:0] = gpio_out[2:0] on the tick_ctrl_in port (system_top.v's IOB registers)
+    # CTRL_IN[3:1] = gpio_out[2:0] on the tick_ctrl_in port (system_top.v's IOB registers)
     same(("tick_ctrl_in_slice", "Din"), (sched, "gpio_out"), "CTRL_IN slice source")
     if insts.get("tick_ctrl_in_slice", ("", {}))[1].get("Dout") != "tick_ctrl_in":
         errors.append("tick_ctrl_in_slice.Dout does not drive the tick_ctrl_in port")

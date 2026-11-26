@@ -1,4 +1,5 @@
 """Sphinx configuration for hopcap (Diátaxis layout, -W in CI)."""
+
 import json
 from pathlib import Path
 
@@ -25,12 +26,20 @@ myst_enable_extensions = ["colon_fence", "deflist", "fieldlist"]
 myst_heading_anchors = 3
 
 # Render the register map from the single source of truth so docs cannot drift.
-_regmap = json.loads((Path(__file__).resolve().parents[1] / "hdl" / "hopctrl_regmap.json").read_text())
+_regmap = json.loads(
+    (Path(__file__).resolve().parents[1] / "hdl" / "hopctrl_regmap.json").read_text()
+)
 _rows = ["| Offset | Name | Access | Notes |", "|---|---|---|---|"]
 for r in _regmap["registers"]:
     note = r.get("desc") or r.get("bits") or ""
     if "write_bits" in r:
-        note = "W: " + "; ".join(f"[{k}] {v}" for k, v in r["write_bits"].items()) + ". R: " + "; ".join(
-            f"[{k}] {v}" for k, v in r["read_bits"].items())
+        note = (
+            "W: "
+            + "; ".join(f"[{k}] {v}" for k, v in r["write_bits"].items())
+            + ". R: "
+            + "; ".join(f"[{k}] {v}" for k, v in r["read_bits"].items())
+        )
     _rows.append(f"| `{r['offset']}` | `{r['name']}` | {r['access']} | {note} |")
-(Path(__file__).resolve().parent / "reference" / "_regmap_table.md").write_text("\n".join(_rows) + "\n")
+(Path(__file__).resolve().parent / "reference" / "_regmap_table.md").write_text(
+    "\n".join(_rows) + "\n"
+)
