@@ -37,8 +37,12 @@ RECEIVER_IPV4 = "192.0.2.2/24"
 LOCK = Path("/tmp/vrt49-corundum-hardware.lock")
 
 
-def receiver_interface(root: Path = Path("/sys/class/net"), port: str | None = None) -> dict:
-    rx = link.receiver(port)
+def receiver_interface(
+    root: Path = Path("/sys/class/net"),
+    port: str | None = None,
+    rx: link.Receiver | None = None,
+) -> dict:
+    rx = rx or link.receiver(port)
     for iface in sorted(p for p in root.iterdir() if p.is_dir()):
         addr = iface / "address"
         if not addr.exists() or addr.read_text().strip().lower() != rx.mac:
@@ -71,7 +75,11 @@ def receiver_interface(root: Path = Path("/sys/class/net"), port: str | None = N
 
 
 def validate_receiver_address(
-    raw: str, interface: str, rp_filter: int | None = None, nm_profile: str = "vrt49-sfp"
+    raw: str,
+    interface: str,
+    rp_filter: int | None = None,
+    nm_profile: str = "vrt49-sfp",
+    expected: str = RECEIVER_IPV4,
 ) -> dict:
     """192.0.2.2/24 must be deliverable to a socket from datagrams arriving on the receiver NIC.
 
@@ -82,9 +90,9 @@ def validate_receiver_address(
     TcpExtIPReversePathFilter == received packets.
     """
     on_receiver = bool(
-        re.search(rf"\binet {re.escape(RECEIVER_IPV4)}\b.*\b{re.escape(interface)}\b", raw)
+        re.search(rf"\binet {re.escape(expected)}\b.*\b{re.escape(interface)}\b", raw)
     )
-    anywhere = bool(re.search(rf"\binet {re.escape(RECEIVER_IPV4)}\b", raw))
+    anywhere = bool(re.search(rf"\binet {re.escape(expected)}\b", raw))
     ok = on_receiver or (anywhere and rp_filter == 0)
     if on_receiver:
         note = None
@@ -92,17 +100,17 @@ def validate_receiver_address(
         note = "weak-host delivery via another interface (receiver rp_filter is 0)"
     elif anywhere:
         note = (
-            f"{RECEIVER_IPV4} is on another interface and {interface} has effective rp_filter={rp_filter}: "
+            f"{expected} is on another interface and {interface} has effective rp_filter={rp_filter}: "
             f"the kernel will drop every datagram arriving on {interface}. The effective value is "
             f"max(all, {interface}), so fix (root, persist in /etc/sysctl.d): "
             f"`sysctl -w net.ipv4.conf.all.rp_filter=0 net.ipv4.conf.{interface}.rp_filter=0`, "
             f"or `nmcli con up {nm_profile}` while the link is up"
         )
     else:
-        note = f"{RECEIVER_IPV4} is not configured on any interface"
+        note = f"{expected} is not configured on any interface"
     return {
         "ok": ok,
-        "expected": RECEIVER_IPV4,
+        "expected": expected,
         "interface": interface,
         "on_receiver_interface": on_receiver,
         "address_present": anywhere,

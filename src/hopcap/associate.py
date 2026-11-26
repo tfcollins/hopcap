@@ -42,7 +42,8 @@ class EdgeResult:
 
     @property
     def executed(self) -> bool:
-        return self.status in ("EXECUTED", "LATE_EXECUTED")
+        # SCHEDULED: a completion-free edge; the run checks Tick's late/overflow counters
+        return self.status in ("EXECUTED", "LATE_EXECUTED", "SCHEDULED")
 
 
 @dataclass
@@ -52,6 +53,7 @@ class Window:
     packets: list[tuple[Record, vrt.IfData]] = field(default_factory=list)
     gaps: int = 0
     last_count: int | None = None  # pkt_count continuity, seeded from the Context
+    gap_before_first_data: bool = False  # the only gap sits between Context and first data
 
     @property
     def samples(self) -> int:
@@ -177,6 +179,8 @@ def _segment(
             windows.append(cur)
             last_pkt = None
         if cur.last_count is not None and ((cur.last_count + 1) & 0xF) != pkt.pkt_count:
+            if not cur.packets and cur.gaps == 0:
+                cur.gap_before_first_data = True
             cur.gaps += ((pkt.pkt_count - cur.last_count - 1) & 0xF) or 1
         cur.last_count = pkt.pkt_count
         cur.packets.append((rec, pkt))
@@ -204,7 +208,14 @@ def associate(
     expected_peer: tuple[str, int] | None = None,
     gap_ps: int | None = None,
     freq_tolerance_hz: int = 0,
+    pre_run_loss_mark: bool = False,
 ) -> AssociationResult:
+    """Pair each executed edge with its Context-tagged capture window.
+
+    ``pre_run_loss_mark``: the framer marks earlier tap loss by skipping one packet count on
+    the first data packet after its loss counter moves. When the caller has shown the loss
+    counter did not move during the run (loss before the run only), that single skip between
+    the first window's Context and its first data packet is not a lost packet."""
     counts = Counts()
     if gap_ps is None:
         gap_ps = default_gap_ps(compiled)
@@ -275,6 +286,15 @@ def associate(
                 claimed.add(id(orphan))
         samples = win.samples if win else 0
         gaps = win.gaps if win else 0
+        if (
+            pre_run_loss_mark
+            and win is not None
+            and windows
+            and win is windows[0]
+            and win.gap_before_first_data
+            and gaps == 1
+        ):
+            gaps = 0
         n_pkts = len(win.packets) if win else 0
         expected_pkts = -(-expected_samples // samples_per_packet)
         complete = (

@@ -50,6 +50,50 @@ the RX DMA directly, which this profile replaces by design) and runs
 nets plus the gate, tagger, TX and chip-B wiring. `verify_evidence.py bitstream` follows the
 MANIFEST profile.
 
+### Profile `adrv9361` (ADRV9361-Z7035, 1G SFP)
+
+`--profile adrv9361` (SFP only) builds a different base: vrt49's
+`hdl/projects/adrv9361z7035_vrt49_sfp` on the ADRV9361-Z7035 SOM
+(design: `docs/superpowers/specs/2026-11-25-adrv9361z7035-hop-design.md`).
+
+```sh
+python3 scripts/assemble_workspace.py --build-root build/ws-a9 --fetch --profile adrv9361
+scripts/build_bitstream.sh --ws build/ws-a9 --evidence evidence/bitstream-a9-<stamp>
+python3 scripts/verify_evidence.py bitstream evidence/bitstream-a9-<stamp>
+```
+
+The assembler stages vrt49's project and the IP it needs plus `vrt49_time_base`, hopcap's
+`vrt49_fhm_hop_ctrl`, `tick_pps_gen` and `tick_gpio_sync`, and Tick's RTL, Z7035 fragment and
+CTRL_IN XDC from `third_party/tick`. Its anchored edits:
+
+| File | Edit |
+|---|---|
+| `system_bd.tcl` | vrt49's own Tick (vendored, 100 MHz) + HOP1 block is cut (their IPs are not built); `source system_bd_adrv9361_hop.tcl` before `validate_bd_design` |
+| `Makefile` | `LIB_DEPS` without `tick_vendor` / `vrt49_ad9361_hop_ctrl`, with `vrt49_time_base vrt49_fhm_hop_ctrl tick_pps_gen` |
+| `system_project.tcl` | Tick's CTRL_IN XDC, `system_adrv9361_hop_cdc.tcl` as a late implementation-only constraint script, `check_adrv9361_hop.tcl` after vrt49's final timing gates |
+| `system_top.v` | CTRL_IN[3:1] from Tick's IOB registers on `tick_clk` (read back on EMIO 43:41), `tick_clk` / `tick_ctrl_in` wrapper ports instead of `ad9361_fastlock_select` |
+
+`hdl/system_bd_adrv9361_hop.tcl` sources Tick's fragment (scheduler at 0x44AA0000, 50 MHz from
+FCLK0, IRQ ps-14), puts HOP2 at 0x44AB0000 on `sys_cpu_clk` fed `{gpio_out[2:0], gpio_out[3]}`
+through `tick_gpio_sync`, drives Tick's and the time base's `pps_in` from `tick_pps_gen`, puts
+`vrt49_time_base_0` on the AD9361 data clock counting the tap's `packed_fifo_wr_en` beats, and sets
+`vrt49_link_throttle` `FORWARD_EVERY_N 1`.
+
+`build_bitstream.sh` runs a plain `make` (the UDP tuple keeps vrt49's defaults; set it at runtime
+through the framer's `v49_udp_*` attributes), then requires an empty `missing_external.log`, the
+final routed timing and bus-skew reports clean, the post-route gate report
+`hopcap_adrv9361_post_route.rpt` (CDC exceptions applied, CTRL_IN registers in OLOGIC sites) and
+`check_hop_netlist.py --profile adrv9361`. It writes `system_top.bin` with
+`bootgen -arch zynq -process_bitstream bin`: the board boots its stock Kuiper SD card and gets the
+bitstream through the FPGA manager at runtime (no JESD on the AD9361, so a runtime PL load is
+safe there, unlike the ZU11EG), followed by `kernel/dts/zynq-adrv9361z7035-hopcap-overlay.dts`
+(`dtc -@`).
+
+The overlay's time base counts beats of `packed_fifo_wr_en`. util_cpack2 packs only the enabled
+converter channels, so `adi,nominal-sps = 15360000` holds at 15.36 MSPS with all four RX converter
+channels (RX1 and RX2 I/Q) enabled on `cf-ad9361-lpc`; with one I/Q pair the beat rate halves and
+the tap keeps every other RX1 sample.
+
 ## 2. Synthesize (Vivado 2025.1)
 
 ```sh

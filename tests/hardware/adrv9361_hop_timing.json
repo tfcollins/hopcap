@@ -1,0 +1,10 @@
+{
+  "image": "hopcap adrv9361 build with tap_accept (2b18c26); lablp, 15.36 MSPS, FastLock pin select",
+  "measured": "4 boots x 16 hops (2026-11-25): crossing 2.44-11.71 us after the scheduled Tick tick, per-boot mean 4.03/6.37/4.08/5.39 us, old tone >= 12.4 dB dominant before every edge",
+  "window_ns": [1000, 15000],
+  "mean_ns": 5000,
+  "mean_tolerance_ns": 2500,
+  "boot_spread_ns": 4000,
+  "min_tone_margin_db": 10,
+  "note": "Latency = Tick edge -> CTRL_IN IOB register (deterministic, one 20 ns tick) -> AD9361 FastLock profile load and RX/TX synthesizer settling -> RX digital filter delay, measured where the new loopback tone overtakes the old in a 64-sample window. The spread is synthesizer settling (the same transitions are slow on every boot), not timing jitter of the hop command. A hop scheduled at the wrong Tick time, early or late by more than the window, fails."
+}

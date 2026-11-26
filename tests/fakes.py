@@ -19,8 +19,9 @@ class FakeTickDevice:
     """read_attr/write_attr over the HDL model. Time advances `step` ticks per poll of
     current_time_ticks, so waits terminate without real sleeping."""
 
-    def __init__(self, step: int = 50_000):
-        self.model = AxiTimedCommandSchedulerModel(queue_depth=16, tick_hz=TICK_HZ)
+    def __init__(self, step: int = 50_000, tick_hz: int = TICK_HZ):
+        self.tick_hz = tick_hz
+        self.model = AxiTimedCommandSchedulerModel(queue_depth=16, tick_hz=tick_hz)
         self.now = 0
         self.step = step
         self.pushed: list[CommandDescriptor] = []
@@ -35,7 +36,7 @@ class FakeTickDevice:
             self._advance()
             return self.now
         if name == "time_tick_hz":
-            return TICK_HZ
+            return self.tick_hz
         if name == "queue_depth":
             return 16
         if name == "queue_level":
@@ -174,7 +175,11 @@ class FakeTimeBase:
         step_s: float = 0.25,
         phase_s: float = 0.6,
         latency_s: float = 0.0,
+        names: tuple[str, ...] = NAMES,
+        nominal_sps: int = 245_760_000,
+        ps_per_sample_q32: int = 17476266666667,
     ):
+        self.names, self.nominal_sps, self.q32 = names, nominal_sps, ps_per_sample_q32
         self.pps, self.loads_seconds, self.step_s = pps, loads_seconds, step_s
         self.latency_s = latency_s
         self.t, self.next_edge = 0.0, phase_s
@@ -207,10 +212,10 @@ class FakeTimeBase:
             return f"0x{(self.missed << 8) | (self.sticky << 4) | ((lk == 2) << 3) | lk:08x}"
         return {
             "v49_tb_mode": f"0x{self.mode:x}",
-            "v49_tb_pps_source": self.NAMES[self.source],
+            "v49_tb_pps_source": self.names[self.source],
             "v49_tb_seconds": str(self.seconds),
-            "v49_tb_nominal_sps": "245760000",
-            "v49_tb_ps_per_sample_q32": "17476266666667",
+            "v49_tb_nominal_sps": str(self.nominal_sps),
+            "v49_tb_ps_per_sample_q32": str(self.q32),
         }[attr]
 
     def write(self, attr: str, value: str) -> None:
@@ -223,9 +228,9 @@ class FakeTimeBase:
         elif attr == "v49_tb_pps_source":
             if self.mode & 1:
                 raise OSError(errno.EBUSY, "v49_tb_pps_source while v49_tb_mode is enabled")
-            if value not in self.NAMES:
+            if value not in self.names:
                 raise OSError(errno.EINVAL, "v49_tb_pps_source")
-            self.source = self.NAMES.index(value)
+            self.source = self.names.index(value)
         elif attr == "v49_tb_seconds":
             self.armed = int(value, 0)
         elif attr == "v49_tb_status":

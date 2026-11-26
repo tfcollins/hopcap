@@ -47,3 +47,22 @@ def test_pins_copies_vrt49_platform_artifact_contract(pins):
         pins["arm_trusted_firmware"]["revision"]
         == artifacts["arm_trusted_firmware"]["revisions"]["2025.1"]
     )
+
+
+def test_pins_match_vrt49_adrv9361_sfp_build(pins):
+    """The adrv9361 profile builds vrt49's adrv9361z7035_vrt49_sfp: same ADI HDL / Corundum."""
+    wf = (ROOT / "third_party/vrt49/.github/workflows/hdl-adrv9361-sfp.yml").read_text()
+    assert f"HDL_SHA: {pins['adi_hdl']['revision']}" in wf
+    assert f"CORUNDUM_SHA: {pins['corundum']['revision']}" in wf
+
+
+def test_tick_pin_carries_the_z7035_integration():
+    """adrv9361 profile inputs at the pinned Tick revision (feat/adrv9361z7035-tick)."""
+    tick = ROOT / "third_party/tick"
+    for rel in (
+        "hdl/projects/adrv9361z7035/ccfmc_lvds/tick_adrv9361z7035_ccfmc_lvds.tcl",
+        "hdl/projects/adrv9361z7035/ccfmc_lvds/tick_adrv9361z7035_ctrl_in.xdc",
+        "scripts/prepare_adi_hdl_adrv9361z7035.py",
+        "kernel/dts/zynq-adrv9361z7035-tick-scheduler.dtso",
+    ):
+        assert (tick / rel).is_file(), rel

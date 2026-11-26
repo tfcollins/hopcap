@@ -5,6 +5,7 @@
 #   make TOP=fhm_hop_chain          # controller + vrt49 framer (needs libvrt49.so, see CLAUDE.md)
 #   make TOP=tick_pps_select        # Tick pps_in selector (small cycle counts, below)
 #   make TOP=tick_gpio_sync         # timed-dma: Tick FHM GPIO into the controller's clock
+#   make TOP=tick_pps_gen           # adrv9361: internal 1PPS on the Tick clock (small TICK_HZ)
 #   make lint
 # Mirrors third_party/vrt49/hdl/sim/cocotb/Makefile (venv re-exec, per-TOP build dirs).
 
@@ -43,6 +44,8 @@ lint:
 	    $(HDL)/vrt49_fhm_hop_ctrl/vrt49_fhm_hop_ctrl.v
 	verilator --lint-only -Wall $(LINT_WARN) $(HDL)/tick_pps_select/tick_pps_select.v
 	verilator --lint-only -Wall $(LINT_WARN) $(HDL)/tick_gpio_sync/tick_gpio_sync.v
+	verilator --lint-only -Wall $(LINT_WARN) $(HDL)/tick_pps_gen/tick_pps_gen.v
+	verilator --lint-only -Wall $(LINT_WARN) $(HDL)/tap_accept/tap_accept.v
 	verilator --lint-only -Wall $(LINT_WARN) -Wno-MULTITOP \
 	    -I$(VRT49_HDL)/axi_vrt49_framer \
 	    $(HDL)/sim/cocotb/fhm_hop_chain.v \
@@ -92,8 +95,26 @@ COMPILE_ARGS += -GALIVE_TIMEOUT=$(PPS_SEL_ALIVE_TIMEOUT) -GPERIOD_MIN=$(PPS_SEL_
     -GPULSE_CYCLES=$(PPS_SEL_PULSE_CYCLES)
 endif
 
+# A "second" is TICK_HZ cycles here; the test reads the same values from the environment.
+ifeq ($(TOP),tick_pps_gen)
+TOPLEVEL := tick_pps_gen
+MODULE   := test_tick_pps_gen
+VERILOG_SOURCES := $(HDL)/tick_pps_gen/tick_pps_gen.v
+export PPS_GEN_TICK_HZ     := 20
+export PPS_GEN_PULSE_TICKS := 3
+COMPILE_ARGS += -GTICK_HZ=$(PPS_GEN_TICK_HZ) -GPULSE_TICKS=$(PPS_GEN_PULSE_TICKS)
+endif
+
+# tap_accept against the real vrt49_sample_tap (adrv9361 time-base sample_valid)
+ifeq ($(TOP),tap_accept)
+TOPLEVEL := tap_accept_chain
+MODULE   := test_tap_accept
+VERILOG_SOURCES := $(HDL)/sim/cocotb/tap_accept_chain.v $(HDL)/tap_accept/tap_accept.v \
+    $(REPO)/third_party/vrt49/hdl/vrt49_sample_tap/vrt49_sample_tap.v
+endif
+
 ifndef TOPLEVEL
-$(error Set TOP=vrt49_fhm_hop_ctrl | fhm_hop_chain | tick_pps_select)
+$(error Set TOP=vrt49_fhm_hop_ctrl | fhm_hop_chain | tick_pps_select | tick_gpio_sync | tick_pps_gen | tap_accept)
 endif
 
 export PYTHONPATH := $(CURDIR):$(REPO)/third_party/vrt49/hdl/sim/cocotb:$(PYTHONPATH)

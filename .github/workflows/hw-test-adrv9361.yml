@@ -1,0 +1,92 @@
+name: Hardware test (lablp, ADRV9361-Z7035)
+
+# Builds the adrv9361 profile (bitstream + FPGA-manager .bin, Tick and vrt49 modules for the
+# stock ARMv7 Kuiper kernel) on nemo, then boots lablp three times (SD card untouched: the
+# bitstream is loaded at runtime) and proves RX and TX FastLock hops land on their scheduled
+# Tick timestamps in the vrt49 capture (tests/hardware/test_hw_adrv9361.py).
+
+on:
+  workflow_dispatch:
+    inputs:
+      boots: { description: "independent lablp boots", default: "3", type: string }
+      plan: { description: "FastLock plan", default: "examples/plans/adrv9361-loopback-8slot.json", type: string }
+  pull_request:
+    types: [labeled, synchronize]
+  schedule:
+    - cron: "0 11 * * 1"   # weekly; offset from the tron jobs that share nemo
+
+permissions:
+  contents: read
+
+concurrency:
+  group: hopcap-lablp
+  cancel-in-progress: false
+
+jobs:
+  hardware:
+    # PRs only from branches of this repository (never forks: this runs PR code on nemo's
+    # self-hosted runner), and only once a maintainer has added the hw-test label.
+    if: >-
+      github.event_name != 'pull_request' ||
+      (contains(github.event.pull_request.labels.*.name, 'hw-test') &&
+       github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: [self-hosted, hw-nemo]
+    timeout-minutes: 300
+    env:
+      VIVADO_SETTINGS: /tools/Xilinx/2025.1/Vivado/settings64.sh
+      # Build trees go to nemo's data disk: / is shared with the hardware jobs' 50 GiB floor.
+      BUILD_BASE: /mnt/onetb/scratch/hopcap-ci
+      # ADI Linux @ 2023_r2_p1 (2e8908932dfd), mounted read-only by build_lablp_modules.sh;
+      # nemo already holds one for tick's lablp job. Cloned on first use where it does not.
+      ADI_LINUX_DIR: /home/tcollins/tick-kernel-284114-standalone
+      BOOTS: ${{ inputs.boots || '3' }}
+      PLAN: ${{ inputs.plan || 'examples/plans/adrv9361-loopback-8slot.json' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          token: ${{ secrets.SUBMODULES_TOKEN || github.token }}
+      - name: Runner venv with pinned labgrid-plugins
+        run: |
+          uv venv .venv-hw
+          uv pip install --python .venv-hw/bin/python -e third_party/tick -e ".[test,hardware,lab]" numpy \
+            "labgrid-plugins @ git+https://github.com/tfcollins/labgrid-plugins@$(cat labgrid-plugins.lock)"
+          echo "$PWD/.venv-hw/bin" >> "$GITHUB_PATH"
+      - name: Assemble and build the adrv9361 bitstream
+        run: |
+          ws="$BUILD_BASE/ws-$GITHUB_RUN_ID"
+          python3 scripts/assemble_workspace.py --build-root "$ws" --fetch --profile adrv9361
+          flock /tmp/hdl-builder.lock scripts/build_bitstream.sh --ws "$ws" \
+            --vivado-settings "$VIVADO_SETTINGS" --evidence "$BUILD_BASE/bit-$GITHUB_RUN_ID"
+      - name: ADI Linux 2023_r2_p1 (module build tree)
+        run: |
+          if [ ! -f "$ADI_LINUX_DIR/Makefile" ]; then
+            ADI_LINUX_DIR="$BUILD_BASE/adi-linux-2023_r2_p1"
+            [ -d "$ADI_LINUX_DIR/.git" ] || git clone -q --depth 1 --branch 2023_r2_p1 \
+              https://github.com/analogdevicesinc/linux.git "$ADI_LINUX_DIR"
+            echo "ADI_LINUX_DIR=$ADI_LINUX_DIR" >> "$GITHUB_ENV"
+          fi
+          test "$(git -C "$ADI_LINUX_DIR" rev-parse HEAD)" = 2e8908932dfd9faf40ec9220a508aa1ce02699a8
+      - name: Cross-build the Tick and vrt49 modules (32-bit ARMv7)
+        run: scripts/build_lablp_modules.sh --linux-dir "$ADI_LINUX_DIR" --work-dir "$BUILD_BASE/mod-$GITHUB_RUN_ID"
+      - name: Hop HIL on lablp
+        run: |
+          scripts/run_lablp_hopcap_hil.sh \
+            --bin "$BUILD_BASE/bit-$GITHUB_RUN_ID/system_top.bin" \
+            --tick-module "$BUILD_BASE/mod-$GITHUB_RUN_ID/axi_timed_command_scheduler.ko" \
+            --vrt49-module "$BUILD_BASE/mod-$GITHUB_RUN_ID/iio-vrt49-buffer.ko" \
+            --evidence-dir "$GITHUB_WORKSPACE/evidence/lablp" --boots "$BOOTS" --plan "$PLAN"
+      - name: Upload evidence
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: lablp-hop-evidence-${{ github.run_attempt }}
+          path: |
+            evidence/lablp
+            !evidence/lablp/**/datagrams.spool
+            ${{ env.BUILD_BASE }}/bit-${{ github.run_id }}
+          retention-days: 14
+      - name: Remove the build trees
+        if: always()
+        run: rm -rf "$BUILD_BASE/ws-$GITHUB_RUN_ID" "$BUILD_BASE/mod-$GITHUB_RUN_ID" "$BUILD_BASE/bit-$GITHUB_RUN_ID"

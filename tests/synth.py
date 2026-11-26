@@ -27,6 +27,7 @@ def stream_for_plan(
     drop_context_for: set[int] = frozenset(),
     drop_data_packets: dict[int, set[int]] | None = None,
     t0_mono_ns: int = 1_000_000_000,
+    peer: tuple[str, int] = (FPGA_IP, FPGA_PORT),
 ) -> list[Record]:
     """One Context then ceil(capture_samples / spp) IF Data packets per edge.
 
@@ -56,7 +57,7 @@ def stream_for_plan(
                 hop_epoch=epoch,
             )
             recs.append(
-                Record(mono_ns=mono, real_ns=mono, peer_ip=FPGA_IP, peer_port=FPGA_PORT, data=ctx)
+                Record(mono_ns=mono, real_ns=mono, peer_ip=peer[0], peer_port=peer[1], data=ctx)
             )
         pkt_count += 1
         n_samples = plan.capture_samples(sample_rate_hz=fs, tick_hz=tick_hz)
@@ -81,8 +82,8 @@ def stream_for_plan(
                     Record(
                         mono_ns=mono_i,
                         real_ns=mono_i,
-                        peer_ip=FPGA_IP,
-                        peer_port=FPGA_PORT,
+                        peer_ip=peer[0],
+                        peer_port=peer[1],
                         data=pkt,
                     )
                 )

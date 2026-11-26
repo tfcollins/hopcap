@@ -1,0 +1,94 @@
+// SPDX-License-Identifier: GPL-2.0
+/*
+ * hopcap runtime overlay for the adrv9361 profile (ADRV9361-Z7035 on the ADRV1CRR-FMC,
+ * built from vrt49's adrv9361z7035_vrt49_sfp + hdl/system_bd_adrv9361_hop.tcl).
+ *
+ * The board boots its stock Kuiper SD card; the hopcap bitstream is loaded at runtime
+ * through the FPGA manager (byte-swapped .bin), then this overlay is applied through
+ * configfs.  It targets the `fpga_axi` label of the Kuiper zynq-adrv9361-z7035-fmc tree
+ * (fpga-axi@0, single address/size cells on Zynq-7000) and needs that DTB's __symbols__
+ * (`fpga_axi`, `clkc`).  Compile with `dtc -@`.
+ *
+ * The framer node is vrt49's zynq-adrv9361z7035-vrt49-sfp-control-overlay.dts (DMA-less
+ * control device with the `udp` window, MTU 1024; PROVENANCE.md) plus the time-base
+ * properties of the DMA-less ZU11EG control overlay.  The Tick and HOP2 nodes replace
+ * vrt49's 100 MHz Tick and HOP1 nodes.
+ *
+ * Time base (VRT time = Tick time, spec decision 3):
+ *   - pps source 0 "tick" is vrt49_time_base_0/pps_in, driven by tick_pps_gen on the Tick
+ *     clock (the same pulse as Tick's pps_in); source 1 "disabled" is pps_alt_in, tied 0.
+ *   - adi,nominal-sps counts *beats of util_ad9361_adc_pack/packed_fifo_wr_en*, the strobe the
+ *     VRT tap and the time base both use.  util_cpack2 packs only the enabled converter
+ *     channels into its 64-bit word, so the beat rate is the sample rate only when all four
+ *     RX converter channels (voltage0..3 on cf-ad9361-lpc: RX1 I/Q and RX2 I/Q) are enabled;
+ *     then bits [31:0] of each beat are one RX1 I/Q sample.  With a single I/Q pair enabled
+ *     each beat carries two samples, the beat rate halves (7.68 MHz) and the tap forwards
+ *     only every other RX1 sample.  15360000 assumes 15.36 MSPS with all four enabled.
+ *   - adi,ps-per-sample-q32 = round(1e12 / 15.36e6 * 2^32).
+ *   - adi,pps-margin = 15360 beats (1000 ppm): the PPS comes from the PS reference (FCLK0
+ *     via the tick MMCM) and the beats from the AD9361's own reference, two independent
+ *     oscillators; their offset is tens of ppm.
+ *   - strict, and started disabled: userspace selects "tick", arms seconds and enables.
+ *
+ * Tick runs at 50 MHz from FCLK0 through an MMCM (tick's Z7035 fragment), described as FCLK0
+ * divided by two: the driver enables FCLK0 and checks the rate against TIME_TICK_HZ.  HOP2
+ * (vrt49_fhm_hop_ctrl, hdl/hopctrl_regmap.json) has no kernel driver; the host maps it.  Its
+ * SETTLE / CAPTURE / DRAIN_TIMEOUT registers count sys_cpu_clk (100 MHz) cycles, Tick counts
+ * 50 MHz ticks: never mix the two.
+ */
+
+/dts-v1/;
+/plugin/;
+
+&fpga_axi {
+	#address-cells = <1>;
+	#size-cells = <1>;
+
+	iio_vrt49_framer@44a80000 {
+		compatible = "adi,axi-vrt49-framer-1.01.a",
+		             "adi,axi-vrt49-framer-1.00.a";
+		reg = <0x44a80000 0x1000>, <0x44a90000 0x1000>;
+		reg-names = "framer", "udp";
+		adi,stream-id = <0x01000000>;
+		adi,packet-mtu = <1024>;
+		/* No adi,enable-at-boot: probing disables the framer (the bitstream's
+		 * DEFAULT_ENABLE streams from FPGA load until then). */
+		adi,pps-source-names = "tick", "disabled";
+		adi,nominal-sps = <15360000>;
+		adi,pps-margin = <15360>;
+		adi,ps-per-sample-q32 = /bits/ 64 <279620266666667>;
+		adi,timebase-strict;
+		adi,timebase-start-disabled;
+	};
+
+	tick_clk: tick-clk {
+		compatible = "fixed-factor-clock";
+		#clock-cells = <0>;
+		clocks = <&clkc 15>;
+		clock-div = <2>;
+		clock-mult = <1>;
+		clock-output-names = "tick_clk";
+	};
+
+	timed-command-scheduler@44aa0000 {
+		compatible = "adi,axi-timed-command-scheduler-1.0";
+		reg = <0x44aa0000 0x1000>;
+		clocks = <&tick_clk>;
+		clock-names = "s_axi_aclk";
+		adi,time-tick-hz = <50000000>;
+	};
+
+	fhm-hop-controller@44ab0000 {
+		/* No kernel driver: the host programs it over /dev/mem. */
+		compatible = "nous,vrt49-fhm-hop-controller-1.0";
+		reg = <0x44ab0000 0x1000>;
+		clocks = <&clkc 15>;
+		clock-names = "s_axi_aclk";
+		/* Tick gpio_out[2:0] = slot (the CTRL_IN code), gpio_out[3] = event; the BD
+		 * reorders them to the controller's {slot, event} scheduler_gpio. */
+		adi,slot-bits = <3>;
+		adi,slot-gpio-lsb = <0>;
+		adi,event-gpio-bit = <3>;
+		adi,clock-hz = <100000000>;
+	};
+};

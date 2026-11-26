@@ -27,7 +27,7 @@ PORT_CONTRACTS = {
 }
 LEGACY_PORT = "qsfp"
 # Build profiles (assemble_workspace.py --profile). Evidence predating profiles is "default".
-PROFILES = ("default", "timed-dma")
+PROFILES = ("default", "timed-dma", "adrv9361")
 # timed-dma replaces vrt49's RX netlist check (it asserts cpack feeds the RX DMA directly)
 # with check_hop_netlist --profile timed-dma, and must carry Tick's P3b RTL and fragment.
 TDMA_MANIFEST_FILES = (
@@ -39,6 +39,19 @@ TDMA_MANIFEST_FILES = (
 )
 # Tick on core_clk_a (HMC7044 ch6, 122.88 MHz); ADI's XDC declares 4.00 ns.
 TDMA_TX_DEV_CLK_PERIOD_NS = "8.138"
+# adrv9361 (ADRV9361-Z7035): a different project, gated on vrt49's final routed reports and the
+# post-route gate; ships the FPGA-manager .bin; Tick at 50 MHz; no ZU11EG contract checks.
+A9_MANIFEST_FILES = (
+    "projects/adrv9361z7035_vrt49_sfp/system_bd_adrv9361_hop.tcl",
+    "projects/adrv9361z7035_vrt49_sfp/system_adrv9361_hop_cdc.tcl",
+    "projects/adrv9361z7035_vrt49_sfp/check_adrv9361_hop.tcl",
+    "projects/adrv9361z7035/ccfmc_lvds/tick_adrv9361z7035_ccfmc_lvds.tcl",
+    "library/tick_pps_gen/tick_pps_gen.v",
+    "library/vrt49_time_base/vrt49_time_base.v",
+)
+A9_TIMING = (
+    "final_timing: All user specified timing constraints are met; final_bus_skew: no violations"
+)
 
 
 def sha256(path: Path) -> str:
@@ -79,19 +92,43 @@ def _kv(text: str) -> dict[str, str]:
 
 def verify_bitstream(d: Path, *, release: bool = False) -> list[str]:
     errors: list[str] = []
-    _check_sums(d, errors, ("system_top.bit", "system_top.xsa", "MANIFEST.json"))
+    man = json.loads((d / "MANIFEST.json").read_text()) if (d / "MANIFEST.json").exists() else {}
+    profile = man.get("profile", "default")
+    a9 = profile == "adrv9361"
+    _check_sums(
+        d,
+        errors,
+        ("system_top.bit", "system_top.xsa", "MANIFEST.json", *(("system_top.bin",) if a9 else ())),
+    )
     summary = d / "summary.txt"
     if not summary.exists():
         return [*errors, "summary.txt missing"]
     text = summary.read_text()
-    if not re.search(r"Timing constraints are met", text):
+    if a9:
+        if A9_TIMING not in text:
+            errors.append(f"adrv9361 summary lacks {A9_TIMING!r}")
+    elif not re.search(r"Timing constraints are met", text):
         errors.append("timing check did not report 'Timing constraints are met'")
     if "check_hop_netlist: OK" not in text:
         errors.append("check_hop_netlist did not report OK")
-    man = json.loads((d / "MANIFEST.json").read_text()) if (d / "MANIFEST.json").exists() else {}
-    profile = man.get("profile", "default")
     if profile not in PROFILES:
         errors.append(f"MANIFEST profile {profile!r} is not one of {PROFILES}")
+    elif a9:
+        if "check_hop_netlist: profile adrv9361: OK" not in text:
+            errors.append("check_hop_netlist did not report the adrv9361 profile OK")
+        if not re.search(r"check-sfp-rx-netlist: SKIPPED \(profile adrv9361", text):
+            errors.append("check-sfp-rx-netlist not recorded as skipped for adrv9361")
+        if _kv(text).get("tick_time_tick_hz") != "50000000":
+            errors.append("adrv9361 summary does not record tick_time_tick_hz=50000000")
+        if (d / "system_top.bin").exists() and _kv(text).get("fpga_manager_bin_sha256") != sha256(
+            d / "system_top.bin"
+        ):
+            errors.append("fpga_manager_bin_sha256 in summary does not match system_top.bin")
+        if man.get("physical_port") != "sfp":
+            errors.append("adrv9361 MANIFEST physical_port is not sfp")
+        for rel in A9_MANIFEST_FILES:
+            if rel not in man.get("files", {}):
+                errors.append(f"adrv9361 MANIFEST does not list {rel}")
     elif profile == "timed-dma":
         if "check_hop_netlist: profile timed-dma: OK" not in text:
             errors.append("check_hop_netlist did not report the timed-dma profile OK")
@@ -136,7 +173,7 @@ def verify_bitstream(d: Path, *, release: bool = False) -> list[str]:
             errors.append("MANIFEST adi_hdl_head != pins.json")
         if release and man.get("patch_queue"):
             errors.append(f"release build has a non-empty patch queue: {man['patch_queue']}")
-        if not PORT_CONTRACTS[port] <= set(man.get("contract_checks", [])):
+        if not a9 and not PORT_CONTRACTS[port] <= set(man.get("contract_checks", [])):
             errors.append(f"MANIFEST lacks the vrt49 {port} contract checks")
         if not any("vrt49_fhm_hop_ctrl" in f for f in man.get("files", {})):
             errors.append("MANIFEST does not list the hop controller RTL")

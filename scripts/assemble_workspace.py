@@ -31,9 +31,23 @@ Profiles (``--profile``, recorded in MANIFEST.json with the build environment it
                and system_timed_dma_cdc.xdc (implementation-only CDC exceptions)
              * chip B's FHM trigger on the port top: the Talise GPIO IOBUF is split into
                [92:59] + [57:33] and adrv9009_gpio_00_b / gpio_i[58] = tick_fhm_gpio[1]
+  adrv9361   the hop composite on the ADRV9361-Z7035 (spec 2026-11-25-adrv9361z7035-hop-design),
+             SFP only.  A different base: vrt49's projects/adrv9361z7035_vrt49_sfp (1G SFP) with
+             * the vrt49 IP it needs (framer, pack, tap, counter CDC, axis_to_network, throttle,
+               udp_tx, sfp_1g) plus vrt49_time_base;
+             * hopcap vrt49_fhm_hop_ctrl (HOP2), tick_pps_gen (internal 1PPS), tick_gpio_sync
+               (module reference) and system_bd_adrv9361_hop.tcl / system_adrv9361_hop_cdc.tcl
+               / check_adrv9361_hop.tcl in the project;
+             * Tick's RTL + IP tcl and its Z7035 fragment + CTRL_IN XDC under
+               projects/adrv9361z7035/ccfmc_lvds/ (where Tick's tooling puts them);
+             * anchored edits: system_project.tcl (CTRL_IN XDC, CDC script, post-route gate),
+               Makefile (LIB_DEPS without tick_vendor / vrt49_ad9361_hop_ctrl), system_bd.tcl
+               (vrt49's Tick + HOP1 block removed, the hop fragment sourced before
+               validate_bd_design) and system_top.v (CTRL_IN[3:1] from IOB registers on
+               tick_clk, read back on EMIO 43:41; CTRL_IN0 to the PS buffer; tick_clk / tick_ctrl_in wrapper ports).
 
 Usage:
-  assemble_workspace.py --build-root build/ws [--port sfp|qsfp] [--profile default|timed-dma]
+  assemble_workspace.py --build-root build/ws [--port sfp|qsfp] [--profile default|timed-dma|adrv9361]
                         [--adi-hdl PATH] [--corundum PATH] [--fetch] [--dry-run]
 """
 
@@ -121,7 +135,118 @@ PROFILES = {
         "build_env": {"VRT_DAC_TX_ENABLE": "0", "TICK_TIMEBASE_CLK": "core_clk_a"},
         "ports": ("sfp",),
     },
+    # ADRV9361-Z7035 (lablp): vrt49's adrv9361z7035_vrt49_sfp + Tick at 50 MHz + HOP2.
+    "adrv9361": {"build_env": {}, "ports": ("sfp",)},
 }
+
+# --- adrv9361 profile (ADRV9361-Z7035, vrt49 adrv9361z7035_vrt49_sfp) ---------------------
+A9_PROJECT_REL = Path("projects/adrv9361z7035_vrt49_sfp")
+A9_TICK_PROJECT_REL = Path("projects/adrv9361z7035/ccfmc_lvds")
+A9_TICK_FRAGMENT = "tick_adrv9361z7035_ccfmc_lvds.tcl"
+A9_TICK_XDC = "tick_adrv9361z7035_ctrl_in.xdc"
+# What vrt49's hdl-adrv9361-sfp.yml stages, minus vrt49_ad9361_hop_ctrl and tick_vendor (HOP1
+# and vrt49's vendored Tick are replaced), plus vrt49_time_base.
+A9_VRT49_IPS = (
+    "axi_vrt49_framer",
+    "vrt49_pack",
+    "vrt49_sample_tap",
+    "vrt49_counter_cdc",
+    "vrt49_axis_to_network",
+    "vrt49_frame_throttle",
+    "vrt49_udp_tx",
+    "vrt49_sfp_1g",
+    "vrt49_time_base",
+)
+A9_HOP_IPS = ("vrt49_fhm_hop_ctrl", "tick_pps_gen", "tap_accept")  # packaged hopcap IP (LIB_DEPS)
+A9_MODREF_RTL = (Path("library/tick_gpio_sync/tick_gpio_sync.v"),)  # hopcap module reference
+A9_HOP_FRAGMENT = "system_bd_adrv9361_hop.tcl"
+A9_CDC_TCL = "system_adrv9361_hop_cdc.tcl"
+A9_GATE_TCL = "check_adrv9361_hop.tcl"
+A9_PROJECT_FILES = (A9_HOP_FRAGMENT, A9_CDC_TCL, A9_GATE_TCL)
+A9_HOP_FRAGMENT_SOURCE = f"source {A9_HOP_FRAGMENT}"
+A9_TOP = A9_PROJECT_REL / "system_top.v"
+A9_LIB_DEPS_OLD = "LIB_DEPS += tick_vendor vrt49_ad9361_hop_ctrl\n"
+A9_LIB_DEPS_NEW = "LIB_DEPS += vrt49_time_base vrt49_fhm_hop_ctrl tick_pps_gen tap_accept\n"
+A9_MAKEFILE_BLOCK = (
+    "# hopcap adrv9361: Tick from third_party/tick (module reference, 50 MHz), HOP2, internal\n"
+    "# 1PPS and the VRT time base replace vrt49's vendored Tick and HOP1.\n"
+    + A9_LIB_DEPS_NEW
+    + "".join(f"M_DEPS += {name}\n" for name in A9_PROJECT_FILES)
+    + f"M_DEPS += ../adrv9361z7035/ccfmc_lvds/{A9_TICK_FRAGMENT}\n"
+    + f"M_DEPS += ../adrv9361z7035/ccfmc_lvds/{A9_TICK_XDC}\n"
+    + f"M_DEPS += ../../{TICK_LIB_REL}/axi_timed_command_scheduler.v\n"
+    + "".join(f"M_DEPS += ../../{rel}\n" for rel in A9_MODREF_RTL)
+)
+# vrt49's own Tick (tick_vendor IP at 100 MHz) + HOP1 + the fastlock port: removed from
+# system_bd.tcl because neither IP is built (LIB_DEPS) in this profile.
+A9_BD_CUT_START = "# Tick and the hop bridge share the proven 100 MHz PS FCLK0/sys_cpu_clk domain\n"
+A9_BD_CUT_END = "ad_connect vrt49_hop_ctrl_0/fastlock_select ad9361_fastlock_select\n"
+A9_BD_CUT_CELLS = ("tick_scheduler_0", "vrt49_hop_ctrl_0")
+A9_BD_CUT_NOTE = (
+    "# hopcap adrv9361: vrt49's Tick (tick_vendor, 100 MHz) + HOP1 (vrt49_ad9361_hop_ctrl) and\n"
+    "# the ad9361_fastlock_select port were removed here by assemble_workspace.py; Tick\n"
+    f"# (third_party/tick, 50 MHz) and HOP2 come from {A9_HOP_FRAGMENT}, sourced below.\n"
+)
+A9_PROJECT_XDC_ENTRY = f'"$ad_hdl_dir/{A9_TICK_PROJECT_REL.as_posix()}/{A9_TICK_XDC}"'
+A9_PROJECT_LIST_END = '  "system_top.v" ]'
+A9_CDC_ANCHOR = "set_property PROCESSING_ORDER LATE [get_files $vrt49_cdc_tcl]\n"
+A9_CDC_BLOCK = (
+    "\n# hopcap adrv9361: CDC for Tick -> hop controller and the VRT time base. Tcl (it refuses\n"
+    "# missing cells), late, implementation only, like system_vrt49_cdc.tcl above.\n"
+    f'set hopcap_a9_cdc_tcl [file normalize "{A9_CDC_TCL}"]\n'
+    "add_files -norecurse -fileset constrs_1 $hopcap_a9_cdc_tcl\n"
+    "set_property USED_IN_SYNTHESIS false [get_files $hopcap_a9_cdc_tcl]\n"
+    "set_property PROCESSING_ORDER LATE [get_files $hopcap_a9_cdc_tcl]\n"
+)
+A9_GATE_ANCHOR = "source $ad_hdl_dir/library/axi_ad9361/axi_ad9361_delay.tcl\n"
+A9_GATE_BLOCK = (
+    "# hopcap adrv9361: post-route gate (CDC exceptions applied, CTRL_IN in IOBs)\n"
+    f"source {A9_GATE_TCL}\n"
+)
+A9_TOP_WIRE_OLD = "  wire    [ 2:0]  ad9361_fastlock_select;\n"
+A9_TOP_WIRE_NEW = "  wire            tick_clk;\n  wire    [ 2:0]  tick_ctrl_in;\n"
+A9_TOP_ASSIGN_OLD = (
+    "  assign gpio_ctl[2:0] = ad9361_fastlock_select;\n"
+    "  assign gpio_i[42:40] = ad9361_fastlock_select;\n"
+)
+# The AD9361 takes the FastLock profile from CTRL_IN1..3 (measured on lablp; UG-570/671
+# say "CTRL_IN0 through CTRL_IN2"), so Tick drives
+# gpio_ctl[3:1] and CTRL_IN0 (EMIO 40) joins vrt49's PS-owned buffer in place of CTRL_IN3.
+A9_TOP_COMMENT_OLD = (
+    "  // AD9361 GPIO 46:43 and 39:32 remain PS-owned.  CTRL_IN[2:0] on\n"
+    "  // gpio_ctl[2:0] are exclusively driven by the timed fastlock selector;\n"
+    "  // CTRL_IN3/gpio_ctl[3] remains under the stock PS GPIO policy.\n"
+)
+A9_TOP_COMMENT_NEW = (
+    "  // hopcap adrv9361: AD9361 GPIO 46:44, 40 (CTRL_IN0) and 39:32 remain PS-owned;\n"
+    "  // CTRL_IN[3:1] (the FastLock profile pins) are driven by Tick below.\n"
+)
+A9_TOP_PS_IOBUF_OLD = (
+    "    .dio_t ({gpio_t[46:43], gpio_t[39:32]}),\n"
+    "    .dio_i ({gpio_o[46:43], gpio_o[39:32]}),\n"
+    "    .dio_o ({gpio_i[46:43], gpio_i[39:32]}),\n"
+    "    .dio_p ({ gpio_resetb,        // 46:46\n"
+    "              gpio_sync,          // 45:45\n"
+    "              gpio_en_agc,        // 44:44\n"
+    "              gpio_ctl[3],        // 43:43 / CTRL_IN3 (PS-owned)\n"
+)
+A9_TOP_PS_IOBUF_NEW = (
+    "    .dio_t ({gpio_t[46:44], gpio_t[40], gpio_t[39:32]}),\n"
+    "    .dio_i ({gpio_o[46:44], gpio_o[40], gpio_o[39:32]}),\n"
+    "    .dio_o ({gpio_i[46:44], gpio_i[40], gpio_i[39:32]}),\n"
+    "    .dio_p ({ gpio_resetb,        // 46:46\n"
+    "              gpio_sync,          // 45:45\n"
+    "              gpio_en_agc,        // 44:44\n"
+    "              gpio_ctl[0],        // 40:40 / CTRL_IN0 (PS-owned; hopcap)\n"
+)
+A9_TOP_WRAPPER_OLD = "    .ad9361_fastlock_select (ad9361_fastlock_select),\n"
+A9_TOP_WRAPPER_NEW = "    .tick_clk (tick_clk),\n    .tick_ctrl_in (tick_ctrl_in),\n"
+# The tail of Tick's SYSTEM_TOP_IOBUF_NEW (prepare_adi_hdl_adrv9361z7035.py) from this line on
+# is the IOB register + ad_iobuf block; it is reused verbatim so the two cannot drift.
+A9_TICK_IOB_HEAD = (
+    "  // The registers drive only the output buffers so they pack into the IOBs; EMIO\n"
+)
+A9_TOP_MARKER = "tick_ctrl_in_iob"
 
 # Chip B FHM (P3b decision 7, spike G4): applied after Tick's patch_system_top, which already
 # narrowed the Talise GPIO IOBUF to gpio[92:33] and declared tick_fhm_gpio. Bit 58 is
@@ -355,6 +480,119 @@ def patch_system_top_chip_b(text: str) -> str:
     return text
 
 
+# --- adrv9361 anchored edits (all four files are vrt49's adrv9361z7035_vrt49_sfp sources) ---
+
+
+def _replace_once(text: str, old: str, new: str, where: str) -> str:
+    if text.count(old) != 1:
+        raise AssembleError(
+            f"{where}: expected exactly one {old.splitlines()[0].strip()!r}, found "
+            f"{text.count(old)}; vrt49's adrv9361z7035_vrt49_sfp layout changed"
+        )
+    return text.replace(old, new, 1)
+
+
+def patch_a9_system_project(text: str) -> str:
+    """CTRL_IN XDC into the project file list, the CDC Tcl as a late constraint script, and the
+    post-route gate after vrt49's final timing / bus-skew gates."""
+    where = "adrv9361 system_project.tcl"
+    if A9_PROJECT_XDC_ENTRY not in text:
+        text = _replace_once(
+            text,
+            A9_PROJECT_LIST_END,
+            f"  {A9_PROJECT_XDC_ENTRY} \\\n{A9_PROJECT_LIST_END}",
+            where,
+        )
+    if A9_CDC_TCL not in text:
+        text = _replace_once(text, A9_CDC_ANCHOR, A9_CDC_ANCHOR + A9_CDC_BLOCK, where)
+    if f"source {A9_GATE_TCL}" not in text:
+        if "open_run impl_1" not in text or "Final routed VRT49 bus-skew" not in text:
+            raise AssembleError(f"{where}: vrt49's final routed timing gates are missing")
+        text = _replace_once(text, A9_GATE_ANCHOR, A9_GATE_BLOCK + A9_GATE_ANCHOR, where)
+        if text.index(f"source {A9_GATE_TCL}") < text.index("Final routed VRT49 bus-skew"):
+            raise AssembleError(f"{where}: the post-route gate would run before vrt49's gates")
+    return text
+
+
+def patch_a9_makefile(text: str) -> str:
+    if A9_LIB_DEPS_NEW in text:
+        return text
+    return _replace_once(text, A9_LIB_DEPS_OLD, A9_MAKEFILE_BLOCK, "adrv9361 Makefile")
+
+
+def patch_a9_system_bd(text: str) -> str:
+    """Cut vrt49's Tick + HOP1 block (its IPs are not built here) and source the hop fragment
+    right before the final validate_bd_design."""
+    where = "adrv9361 system_bd.tcl"
+    if A9_HOP_FRAGMENT_SOURCE in text:
+        return text
+    if text.count(A9_BD_CUT_START) != 1 or text.count(A9_BD_CUT_END) != 1:
+        raise AssembleError(f"{where}: vrt49's Tick + HOP1 block anchors not found exactly once")
+    start = text.index(A9_BD_CUT_START)
+    end = text.index(A9_BD_CUT_END) + len(A9_BD_CUT_END)
+    if end <= start:
+        raise AssembleError(f"{where}: Tick + HOP1 block anchors out of order")
+    block = text[start:end]
+    # The cut must hold exactly vrt49's Tick, HOP1 and the fastlock port, nothing else.
+    created = re.findall(r"^ad_ip_instance\s+\S+\s+(\S+)", block, re.M)
+    ports = re.findall(r"^create_bd_port\b.*?\s(\S+)\s*$", block, re.M)
+    if sorted(created) != sorted(A9_BD_CUT_CELLS) or ports != ["ad9361_fastlock_select"]:
+        raise AssembleError(
+            f"{where}: the Tick + HOP1 block creates {created} and ports {ports}; expected "
+            f"{list(A9_BD_CUT_CELLS)} and ['ad9361_fastlock_select']"
+        )
+    if "validate_bd_design" in block or "vrt49_link_throttle" in block:
+        raise AssembleError(f"{where}: the Tick + HOP1 block reaches past its own cells")
+    text = text[:start] + A9_BD_CUT_NOTE + text[end:]
+    lines = text.rstrip("\n").split("\n")
+    idx = [i for i, ln in enumerate(lines) if ln.strip() == "validate_bd_design"]
+    if len(idx) != 1:
+        raise AssembleError(f"{where}: expected one validate_bd_design line, found {len(idx)}")
+    lines[idx[0] : idx[0]] = [
+        "# hopcap adrv9361: Tick (third_party/tick, 50 MHz), HOP2, internal 1PPS, VRT time base,",
+        "# no frame throttling",
+        A9_HOP_FRAGMENT_SOURCE,
+    ]
+    return "\n".join(lines) + "\n"
+
+
+def a9_iob_block() -> str:
+    """Tick's CTRL_IN IOB register + ad_iobuf block, taken from Tick's own patcher."""
+    sys.path.insert(0, str(TICK / "scripts"))
+    import prepare_adi_hdl_adrv9361z7035 as tick_a9
+
+    new = tick_a9.SYSTEM_TOP_IOBUF_NEW
+    if new.count(A9_TICK_IOB_HEAD) != 1:
+        raise AssembleError(
+            "Tick prepare_adi_hdl_adrv9361z7035.SYSTEM_TOP_IOBUF_NEW no longer carries the IOB "
+            "register block this profile reuses"
+        )
+    tail = new[new.index(A9_TICK_IOB_HEAD) :]
+    for needle in ("tick_ctrl_in_iob <= tick_ctrl_in;", ".dio_p (gpio_ctl[3:1])", "gpio_i[43:41]"):
+        if needle not in tail:
+            raise AssembleError(f"Tick's CTRL_IN block lacks {needle!r}")
+    return (
+        "  // hopcap adrv9361: Tick gpio_out[2:0] (tick_ctrl_in) drives CTRL_IN[3:1] (gpio_ctl[3:1],\n"
+        "  // the AD9361 fast lock profile select; CTRL_IN1..3, measured on lablp) from\n"
+        "  // IOB registers on tick_clk (Tick's Z7035 block, prepare_adi_hdl_adrv9361z7035.py).\n"
+        + tail
+    )
+
+
+def patch_a9_system_top(text: str) -> str:
+    where = "adrv9361 system_top.v"
+    if A9_TOP_MARKER in text:
+        return text
+    text = _replace_once(text, A9_TOP_WIRE_OLD, A9_TOP_WIRE_NEW, where)
+    text = _replace_once(text, A9_TOP_COMMENT_OLD, A9_TOP_COMMENT_NEW, where)
+    text = _replace_once(text, A9_TOP_PS_IOBUF_OLD, A9_TOP_PS_IOBUF_NEW, where)
+    text = _replace_once(text, A9_TOP_ASSIGN_OLD, a9_iob_block(), where)
+    text = _replace_once(text, A9_TOP_WRAPPER_OLD, A9_TOP_WRAPPER_NEW, where)
+    if "ad9361_fastlock_select" in text:
+        raise AssembleError(f"{where}: ad9361_fastlock_select still referenced after the patch")
+    return text
+
+
 def patch_system_bd(text: str) -> str:
     if "source system_bd_vrt49.tcl" not in text:
         raise AssembleError("system_bd.tcl: anchor 'source system_bd_vrt49.tcl' not found")
@@ -444,6 +682,53 @@ def staged_files(adi: Path, port: str = "sfp", profile: str = "default") -> list
     return out
 
 
+def staged_files_adrv9361(adi: Path) -> list[Path]:
+    out: list[Path] = []
+    for rel in (
+        *(Path("library") / ip for ip in (*A9_VRT49_IPS, *A9_HOP_IPS)),
+        *A9_MODREF_RTL,
+        A9_PROJECT_REL,
+        TICK_LIB_REL,
+        A9_TICK_PROJECT_REL / A9_TICK_FRAGMENT,
+        A9_TICK_PROJECT_REL / A9_TICK_XDC,
+    ):
+        p = adi / rel
+        if p.is_file():
+            out.append(p)
+        elif p.is_dir():
+            out.extend(q for q in sorted(p.rglob("*")) if q.is_file())
+    return out
+
+
+def stage_adrv9361(adi: Path, dry: bool) -> None:
+    """Stage and patch the adrv9361 profile into the ADI tree (see the module docstring)."""
+    if not dry and not (adi / A9_TICK_PROJECT_REL).is_dir():
+        raise AssembleError(
+            f"{adi / A9_TICK_PROJECT_REL} missing: not an ADI HDL tree with ADRV9361"
+        )
+    for ip in A9_VRT49_IPS:
+        stage_dir(VRT49 / "hdl" / ip, adi / "library" / ip, dry)
+    stage_dir(VRT49 / "hdl" / A9_PROJECT_REL, adi / A9_PROJECT_REL, dry)
+    for ip in A9_HOP_IPS:
+        stage_dir(ROOT / "hdl" / ip, adi / "library" / ip, dry)
+    for rel in A9_MODREF_RTL:
+        stage_file(ROOT / "hdl" / rel.relative_to("library"), adi / rel, dry)
+    for name in A9_PROJECT_FILES:
+        stage_file(ROOT / "hdl" / name, adi / A9_PROJECT_REL / name, dry)
+    tick_lib = TICK / "hdl" / TICK_LIB_REL
+    for name in ("axi_timed_command_scheduler.v", "axi_timed_command_scheduler_ip.tcl"):
+        stage_file(tick_lib / name, adi / TICK_LIB_REL / name, dry)
+    for name in (A9_TICK_FRAGMENT, A9_TICK_XDC):
+        stage_file(TICK / "hdl" / A9_TICK_PROJECT_REL / name, adi / A9_TICK_PROJECT_REL / name, dry)
+    if dry:
+        return
+    proj = adi / A9_PROJECT_REL
+    edit(proj / "system_project.tcl", patch_a9_system_project, dry)
+    edit(proj / "Makefile", patch_a9_makefile, dry)
+    edit(proj / "system_bd.tcl", patch_a9_system_bd, dry)
+    edit(proj / "system_top.v", patch_a9_system_top, dry)
+
+
 def run_contract_checks(adi: Path, port: str = "sfp") -> list[str]:
     """The checks vrt49 CI runs on the staged tree: dual Talise links always, the QSFP pinout
     only for a QSFP build (the SFP shell's contracts are vrt49 unit tests on its own tree)."""
@@ -500,6 +785,25 @@ def assemble(
             )
         if check_pins:
             verify_checkout(name, path, pins)
+
+    if profile == "adrv9361":
+        # A different base project; vrt49's ZU11EG contract checks do not apply.  The SFP
+        # shell's own contracts are vrt49 unit tests on its tree, and this profile changes
+        # the design they assert (HOP1 and vrt49's Tick are replaced) on purpose.
+        stage_adrv9361(adi, dry_run)
+        queue = apply_patch_queue(adi, dry_run)
+        return _write_manifest(
+            build_root,
+            adi,
+            cor,
+            pins,
+            port,
+            profile,
+            queue,
+            [],
+            dry_run,
+            [] if dry_run else staged_files_adrv9361(adi),
+        )
 
     # vrt49 IP + project (as hdl-corundum.yml stages them)
     for ip in VRT49_IPS:
@@ -578,6 +882,32 @@ def assemble(
     queue = apply_patch_queue(adi, dry_run)
     checks = run_contract_checks(adi, port) if (contract_checks and not dry_run) else []
 
+    return _write_manifest(
+        build_root,
+        adi,
+        cor,
+        pins,
+        port,
+        profile,
+        queue,
+        checks,
+        dry_run,
+        [] if dry_run else staged_files(adi, port, profile),
+    )
+
+
+def _write_manifest(
+    build_root: Path,
+    adi: Path,
+    cor: Path,
+    pins: dict,
+    port: str,
+    profile: str,
+    queue: list[str],
+    checks: list[str],
+    dry_run: bool,
+    files: list[Path],
+) -> dict:
     manifest = {
         "schema": "hopcap-workspace-manifest/v1",
         "physical_port": port,
@@ -592,9 +922,7 @@ def assemble(
         "corundum_head": git(cor, "rev-parse", "HEAD"),
         "patch_queue": queue,
         "contract_checks": checks,
-        "files": {}
-        if dry_run
-        else {str(p.relative_to(adi)): sha256(p) for p in staged_files(adi, port, profile)},
+        "files": {str(p.relative_to(adi)): sha256(p) for p in files},
     }
     if not dry_run:
         (build_root / "MANIFEST.json").write_text(json.dumps(manifest, indent=2) + "\n")
@@ -617,7 +945,8 @@ def main(argv: list[str] | None = None) -> int:
         "--profile",
         choices=tuple(PROFILES),
         default="default",
-        help="default (hopcap composite) or timed-dma (libdatax P3b candidate A; sfp only)",
+        help="default (hopcap composite), timed-dma (libdatax P3b candidate A; sfp only) or "
+        "adrv9361 (ADRV9361-Z7035 hop composite on vrt49's 1G SFP design; sfp only)",
     )
     ap.add_argument(
         "--adi-hdl",

@@ -16,6 +16,15 @@
 # the artifacts + SHA256SUMS + summary.txt into the evidence directory.  Vivado 2025.1 is
 # required (pins.json "vivado").  Remote use: run this script on the build host over ssh
 # with the workspace rsync'd there (see docs/how-to/build.md).
+#
+# Profile adrv9361 (ADRV9361-Z7035, SFP only) builds projects/adrv9361z7035_vrt49_sfp the way
+# vrt49's hdl-adrv9361-sfp.yml does (plain make; the UDP tuple keeps its defaults and is set at
+# runtime through the framer's udp window), then requires: an empty missing_external.log, the
+# final routed timing and bus-skew reports clean, the post-route gate report
+# (check_adrv9361_hop.tcl) and check_hop_netlist.py --profile adrv9361.  check-sfp-rx-netlist.py
+# is ZU11EG-specific and skipped.  It also writes the byte-swapped FPGA-manager image
+# (bootgen -arch zynq -process_bitstream bin): the board boots stock Kuiper and gets this
+# bitstream at runtime.
 set -euo pipefail
 here=$(cd "$(dirname "$0")/.." && pwd)
 ws="$here/build/ws"
@@ -32,12 +41,11 @@ while [ $# -gt 0 ]; do
     --vivado-settings) settings=$2; shift 2 ;;
     --evidence) evidence=$2; shift 2 ;;
     --jobs) jobs=$2; shift 2 ;;
-    -h|--help) sed -n 2,12p "$0"; exit 0 ;;
+    -h|--help) sed -n 2,26p "$0"; exit 0 ;;
     *) echo "unknown arg $1" >&2; exit 2 ;;
   esac
 done
 hdl="$ws/hdl"
-project="$hdl/projects/adrv9009zu11eg_vrt49_corundum"
 test -f "$ws/MANIFEST.json" || { echo "no MANIFEST.json in $ws; run scripts/assemble_workspace.py first" >&2; exit 2; }
 test -d "$ws/corundum" || { echo "no corundum checkout next to $hdl" >&2; exit 2; }
 # a workspace assembled before the port option is a QSFP one
@@ -46,7 +54,14 @@ test -z "$port" -o "$port" = "$ws_port" || { echo "workspace was assembled for -
 port=$ws_port
 case "$port" in sfp) qsfp_enable=0 ;; qsfp) qsfp_enable=1 ;; *) echo "MANIFEST physical_port $port is not sfp or qsfp" >&2; exit 2 ;; esac
 profile=$(python3 -c "import json,sys; print(json.load(open(sys.argv[1])).get('profile', 'default'))" "$ws/MANIFEST.json")
-case "$profile" in default|timed-dma) ;; *) echo "MANIFEST profile $profile is not default or timed-dma" >&2; exit 2 ;; esac
+case "$profile" in
+  default|timed-dma) project="$hdl/projects/adrv9009zu11eg_vrt49_corundum" ;;
+  adrv9361)
+    project="$hdl/projects/adrv9361z7035_vrt49_sfp"
+    test "$port" = sfp || { echo "profile adrv9361 is an SFP design, MANIFEST says $port" >&2; exit 2; } ;;
+  *) echo "MANIFEST profile $profile is not default, timed-dma or adrv9361" >&2; exit 2 ;;
+esac
+test -d "$project" || { echo "project $project not staged" >&2; exit 2; }
 # KEY=VALUE lines from MANIFEST build_env (keys are shell identifiers; values have no spaces)
 build_env=$(python3 -c "
 import json, re, sys
@@ -71,6 +86,69 @@ evidence=${evidence:-$here/evidence/bitstream-$(date -u +%Y%m%dT%H%M%SZ)}
 mkdir -p "$evidence"
 log="$evidence/make.log"
 echo "build: ws=$ws port=$port profile=$profile build_env=$(echo $build_env) evidence=$evidence" | tee "$evidence/summary.txt"
+if [ "$profile" = adrv9361 ]; then
+  exec_adrv9361=1
+else
+  exec_adrv9361=0
+fi
+if [ "$post_only" = 0 ] && [ "$exec_adrv9361" = 1 ]; then
+(
+  cd "$project"
+  for kv in $build_env; do export "${kv?}"; done
+  make -j"$jobs"
+) 2>&1 | tee "$log"
+fi
+if [ "$exec_adrv9361" = 1 ]; then
+  name=adrv9361z7035_vrt49_sfp
+  bit="$project/$name.runs/impl_1/system_top.bit"
+  xsa="$project/$name.sdk/system_top.xsa"
+  timing="$project/$name.runs/impl_1/system_top_timing_summary_routed.rpt"
+  final_timing="$project/system_top_timing_summary_final.rpt"
+  final_skew="$project/system_top_bus_skew_final.rpt"
+  gate="$project/hopcap_adrv9361_post_route.rpt"
+  for f in "$bit" "$xsa" "$timing" "$final_timing" "$final_skew" "$gate"; do
+    test -s "$f" || { echo "build did not produce $f" >&2; exit 1; }
+  done
+  missing=$(find "$ws" -type f -name missing_external.log -size +0c -print -quit)
+  test -z "$missing" || { echo "nonempty dependency marker: $missing" >&2; exit 1; }
+  # vrt49's check-vivado-timing.py has no xc7z035 part contract; gate on the final routed
+  # report as vrt49's hdl-adrv9361-sfp.yml does, plus the part and routed state.
+  grep -Eq '^\| Device +: 7z035i?-fbg676' "$final_timing" \
+    || { echo "final timing report is not for the xc7z035 (fbg676)" >&2; exit 1; }
+  grep -Eq '^\| Speed File +: -2L' "$final_timing" || { echo "final timing report is not -2L" >&2; exit 1; }
+  grep -Eq '^\| Design State +: Routed' "$final_timing" || { echo "final timing report is not routed" >&2; exit 1; }
+  grep -q "All user specified timing constraints are met" "$final_timing" \
+    || { echo "final routed timing not met: $final_timing" | tee -a "$evidence/summary.txt" >&2; exit 1; }
+  if grep -q "Slack (VIOLATED)" "$final_skew"; then
+    echo "final routed bus skew violated: $final_skew" | tee -a "$evidence/summary.txt" >&2; exit 1
+  fi
+  echo "final_timing: All user specified timing constraints are met; final_bus_skew: no violations" | tee -a "$evidence/summary.txt"
+  echo "check-sfp-rx-netlist: SKIPPED (profile adrv9361: ZU11EG-specific)" | tee -a "$evidence/summary.txt"
+  python3 "$here/scripts/check_hop_netlist.py" "$hdl" --port sfp --profile adrv9361 2>&1 | tee -a "$evidence/summary.txt"
+  # The Zynq-7000 FPGA manager loads a byte-swapped .bin, not the .bit.
+  command -v bootgen >/dev/null || { echo "bootgen not on PATH (Vivado/Vitis 2025.1 settings)" >&2; exit 1; }
+  cp "$bit" "$xsa" "$timing" "$final_timing" "$final_skew" "$gate" "$evidence/"
+  printf 'all:\n{\n  %s\n}\n' "$evidence/system_top.bit" > "$evidence/fpga-manager.bif"
+  bootgen -image "$evidence/fpga-manager.bif" -arch zynq -process_bitstream bin -w on 2>&1 | tee -a "$log"
+  test -s "$evidence/system_top.bit.bin" || { echo "bootgen did not write $evidence/system_top.bit.bin" >&2; exit 1; }
+  mv -f "$evidence/system_top.bit.bin" "$evidence/system_top.bin"
+  cp "$ws/MANIFEST.json" "$evidence/"
+  ( cd "$evidence" && sha256sum system_top.bit system_top.bin system_top.xsa MANIFEST.json > SHA256SUMS )
+  {
+    echo "timing_report=$(basename "$timing")"
+    echo "physical_port=$port"
+    echo "profile=$profile"
+    echo "tick_time_tick_hz=50000000"
+    echo "adi_hdl=${ADI_HDL_SHA:-$(git -C "$hdl" rev-parse HEAD)}"
+    echo "corundum=${CORUNDUM_SHA:-$(git -C "$ws/corundum" rev-parse HEAD)}"
+    echo "hopcap=${HOPCAP_SOURCE_SHA:-$(git -C "$here" rev-parse HEAD)}"
+    echo "bitstream_sha256=$(sha256sum "$evidence/system_top.bit" | cut -d' ' -f1)"
+    echo "fpga_manager_bin_sha256=$(sha256sum "$evidence/system_top.bin" | cut -d' ' -f1)"
+    echo "vivado=$(vivado -version | head -1)"
+  } >> "$evidence/summary.txt"
+  echo "build: done -> $evidence"
+  exit 0
+fi
 if [ "$post_only" = 0 ]; then
 (
   cd "$project"

@@ -18,11 +18,23 @@ from pathlib import Path
 
 from tick.ffh import descriptor_csv
 
+from hopcap import platform as platform_mod
 from hopcap.descriptors import descriptors_for_edge
-from hopcap.plan import HopPlan, PlanError, compile_plan
+from hopcap.plan import (
+    FastLockPlan,
+    HopPlan,
+    PlanError,
+    compile_fastlock_plan,
+    compile_plan,
+    is_fastlock_plan,
+)
+from hopcap.platform import us_to_ticks
 
-DEFAULT_TICK_HZ = 100_000_000
+DEFAULT_TICK_HZ = 100_000_000  # the ZU11EG Tick; `--platform adrv9361` uses 50 MHz
 DEFAULT_FS_HZ = 245_760_000
+DEFAULT_PULSE_US = 10_000  # 10 ms: the width the Tick demo validated
+DEFAULT_LEAD_US = 50_000
+DEFAULT_CONTEXT_MARGIN_US = 100
 
 
 def load_plan(path: Path, *, tick_hz: int = DEFAULT_TICK_HZ) -> tuple[HopPlan, int]:
@@ -50,8 +62,14 @@ def load_plan(path: Path, *, tick_hz: int = DEFAULT_TICK_HZ) -> tuple[HopPlan, i
         period_ticks=ticks("period_us", "period_ticks"),
         settle_ticks=ticks("settle_us", "settle_ticks"),
         capture_ticks=capture,
-        pulse_ticks=ticks("pulse_us", "pulse_ticks", HopPlan.pulse_ticks),
-        lead_ticks=ticks("lead_us", "lead_ticks", HopPlan.lead_ticks),
+        # Defaults are durations, not tick counts: HopPlan's tick defaults assume 100 MHz.
+        pulse_ticks=ticks("pulse_us", "pulse_ticks", us_to_ticks(DEFAULT_PULSE_US, tick_hz)),
+        lead_ticks=ticks("lead_us", "lead_ticks", us_to_ticks(DEFAULT_LEAD_US, tick_hz)),
+        context_margin_ticks=ticks(
+            "context_margin_us",
+            "context_margin_ticks",
+            us_to_ticks(DEFAULT_CONTEXT_MARGIN_US, tick_hz),
+        ),
         name=str(raw.get("name", Path(path).stem)),
     )
     if "init_frequency_hz" in raw:
@@ -59,6 +77,97 @@ def load_plan(path: Path, *, tick_hz: int = DEFAULT_TICK_HZ) -> tuple[HopPlan, i
     if "band_hz" in raw:
         kw["band_hz"] = (int(raw["band_hz"][0]), int(raw["band_hz"][1]))
     return HopPlan(**kw), fs
+
+
+def load_fastlock_plan(path: Path) -> FastLockPlan:
+    """An ADRV9361 plan (``slots`` + ``hops``, durations in µs), validated."""
+    raw = json.loads(Path(path).read_text())
+    if not is_fastlock_plan(raw):
+        raise PlanError(f"{path}: not a FastLock plan (needs slots and hops)")
+    plan = FastLockPlan.from_dict(raw, name=Path(path).stem)
+    plan.validate()
+    return plan
+
+
+def plan_platform(path: Path, requested: str | None) -> platform_mod.Platform:
+    """The platform a plan file is for: ``--platform``, else the file's ``platform`` key, else
+    the ZU11EG. A FastLock plan only runs on a FastLock platform and vice versa."""
+    raw = json.loads(Path(path).read_text())
+    named = raw.get("platform")
+    if requested and named and requested != named:
+        raise PlanError(f"{path} is a {named} plan, not {requested}")
+    plat = platform_mod.get(requested or named)
+    if is_fastlock_plan(raw) != (plat.hop_mode == "fastlock"):
+        kind = "FastLock" if is_fastlock_plan(raw) else "Talise FHM"
+        raise PlanError(f"{path} is a {kind} plan; platform {plat.name} hops by {plat.hop_mode}")
+    return plat
+
+
+def dry_run_fastlock(
+    plan: FastLockPlan, *, t0_ticks: int, plat: platform_mod.Platform, tick_hz: int
+) -> dict:
+    c = compile_fastlock_plan(plan, t0_ticks=t0_ticks, tick_hz=tick_hz)
+    hp = c.plan
+    kinds = plan.hop_kinds()
+    offsets = plan.offsets_hz()
+    seq = plan.sequence()
+    edges = []
+    for e in c.edges:
+        rise, fall = descriptors_for_edge(e, plat.bits)
+        edges.append(
+            {
+                **asdict(e),
+                "kind": kinds[e.index],
+                "rx_lo_hz": plan.slots[e.slot].rx_lo_hz,
+                "tx_lo_hz": plan.slots[e.slot].tx_lo_hz,
+                "tone_from_hz": offsets[seq[e.index]],
+                "tone_to_hz": offsets[e.slot],
+                "rise_gpio": {"mask": rise.args[0], "value": rise.args[1]},
+                "fall_gpio": {"mask": fall.args[0], "value": fall.args[1]},
+                "rise_sequence_id": rise.sequence_id,
+                "fall_sequence_id": fall.sequence_id,
+                "rise_descriptor_hex": descriptor_csv(rise),
+                "fall_descriptor_hex": descriptor_csv(fall),
+                "capture_open_ticks": e.rise_ticks + hp.settle_ticks,
+                "capture_close_ticks": e.rise_ticks + hp.settle_ticks + hp.capture_ticks,
+            }
+        )
+    busy = hp.settle_ticks + hp.capture_ticks + hp.pulse_ticks + hp.context_margin_ticks
+    cyc = platform_mod.controller_cycles
+    return {
+        "schema": "hopcap-dry-run-fastlock/v1",
+        "platform": plat.name,
+        "plan": plan.as_dict(),
+        "tick_hz": tick_hz,
+        "controller_hz": plat.controller_hz,
+        "t0_ticks": t0_ticks,
+        "sample_rate_hz": plan.sample_rate_hz,
+        "capture_samples": hp.capture_samples(sample_rate_hz=plan.sample_rate_hz, tick_hz=tick_hz),
+        "tick_ticks": {
+            k: getattr(hp, k)
+            for k in ("period_ticks", "settle_ticks", "capture_ticks", "pulse_ticks", "lead_ticks")
+        },
+        "controller_cycles": {
+            "settle": cyc(hp.settle_ticks, tick_hz=tick_hz, controller_hz=plat.controller_hz),
+            "capture": cyc(hp.capture_ticks, tick_hz=tick_hz, controller_hz=plat.controller_hz),
+        },
+        "slots": {
+            "rx_lo_hz": [s.rx_lo_hz for s in plan.slots],
+            "tx_lo_hz": [s.tx_lo_hz for s in plan.slots],
+            "words_q44_20": [str(w) for w in c.slots.words()],
+        },
+        "edges": edges,
+        "timing": {
+            "ok": True,
+            "busy_ticks": busy,
+            "period_ticks": hp.period_ticks,
+            "slack_ticks": hp.period_ticks - busy,
+            "end_ticks": c.end_ticks,
+            "duration_s": (c.end_ticks - t0_ticks) / tick_hz,
+        },
+        "pipeline_note": "FastLock pin select: hop k selects RX and TX profile hops[k] on its own "
+        "edge; profile 0 is live before hop 0; no priming edge, nothing staged",
+    }
 
 
 def dry_run(plan: HopPlan, *, fs: int, t0_ticks: int, tick_hz: int) -> dict:
@@ -124,59 +233,112 @@ def _apply_overrides(plan: HopPlan, args, *, fs: int, tick_hz: int) -> HopPlan:
 
 
 def cmd_run(args) -> int:
+    from dataclasses import replace
+
     from hopcap import framer as framer_mod
-    from hopcap.run import RunConfig, build_components_from_board, run_live
-    from hopcap.transport import SshShell
+    from hopcap.run import (
+        RunConfig,
+        build_components_adrv9361,
+        build_components_from_board,
+        run_live,
+    )
+    from hopcap.transport import PasswordSshShell, SshShell
 
-    plan, fs = load_plan(args.plan, tick_hz=args.tick_hz)
-    plan = _apply_overrides(plan, args, fs=fs, tick_hz=args.tick_hz)
-    host, port = args.bind.rsplit(":", 1)
-    from hopcap import link
-
-    dest_mac = args.dest_mac or link.receiver().mac
-    args.rx_interface = args.rx_interface or link.receiver().interface
-    fcfg = framer_mod.FramerConfig(dest_ip=host, dest_port=int(port), dest_mac=dest_mac)
+    plat = plan_platform(args.plan, args.platform)
+    tick_hz = args.tick_hz or plat.tick_hz
+    rx_nic = plat.receiver()
+    if plat.hop_mode == "fastlock":
+        plan = load_fastlock_plan(args.plan)
+        kw = {
+            k: getattr(args, k)
+            for k in ("settle_us", "capture_us", "period_us")
+            if getattr(args, k, None) is not None
+        }
+        if args.capture_samples is not None:
+            kw["capture_us"] = args.capture_samples * 1e6 / plan.sample_rate_hz
+        plan = replace(plan, **kw) if kw else plan
+        plan.validate()
+        fs = plan.sample_rate_hz
+    else:
+        plan, fs = load_plan(args.plan, tick_hz=tick_hz)
+        plan = _apply_overrides(plan, args, fs=fs, tick_hz=tick_hz)
+    bind = args.bind or f"{rx_nic.ip}:{plat.dest_port}"
+    host, port = bind.rsplit(":", 1)
+    dest_mac = args.dest_mac or rx_nic.mac
+    args.rx_interface = args.rx_interface or rx_nic.interface
+    hopctrl_base = args.hopctrl_base if args.hopctrl_base is not None else plat.hopctrl_base
+    fcfg = framer_mod.FramerConfig.for_platform(
+        plat, dest_ip=host, dest_port=int(port), dest_mac=dest_mac
+    )
     board_ip = (
         args.iio_uri.split(":", 1)[1]
         if args.iio_uri.startswith("ip:")
         else args.target.split("@")[-1]
     )
     if args.dry_run:
-        out = dry_run(plan, fs=fs, t0_ticks=0, tick_hz=args.tick_hz)
+        if plat.hop_mode == "fastlock":
+            out = dry_run_fastlock(plan, t0_ticks=0, plat=plat, tick_hz=tick_hz)
+        else:
+            out = dry_run(plan, fs=fs, t0_ticks=0, tick_hz=tick_hz)
         out["endpoints"] = {
-            "tick": {"uri": args.iio_uri, "device": "axi-timed-command-scheduler"},
-            "talise": {"uri": args.iio_uri, "device": "adrv9009-phy"},
-            "hopctrl": {"target": args.target, "base": f"0x{args.hopctrl_base:08x}"},
-            "framer": {"target": args.target, "device": "axi-vrt49-framer"},
-            "receiver": {"bind": args.bind, "interface": args.rx_interface, "kind": args.receiver},
+            "tick": {"uri": args.iio_uri, "device": plat.tick_iio_name},
+            "radio": {"uri": args.iio_uri, "device": plat.phy_iio_name, "hop": plat.hop_mode},
+            "hopctrl": {"target": args.target, "base": f"0x{hopctrl_base:08x}"},
+            "framer": {"target": args.target, "device": plat.framer_iio_name},
+            "receiver": {"bind": bind, "interface": args.rx_interface, "kind": args.receiver},
         }
+        if plat.hop_mode != "fastlock":
+            out["endpoints"]["talise"] = out["endpoints"]["radio"]
         out["framer"] = asdict(fcfg)
         out["out_dir"] = str(args.out)
         json.dump(out, sys.stdout, indent=2)
         sys.stdout.write("\n")
         return 0
-    shell = SshShell(args.target)
-    comps = build_components_from_board(
-        shell,
-        board_ip=board_ip,
-        out_dir=args.out,
-        bind=args.bind,
-        rx_interface=args.rx_interface,
-        rx_cpu=args.rx_cpu,
-        hopctrl_base=args.hopctrl_base,
-        iio_uri=args.iio_uri,
-        receiver=args.receiver,
-    )
+    if plat.hop_mode == "fastlock":
+        shell = PasswordSshShell(args.target, work_dir=Path(args.out) / ".ssh")
+        comps = build_components_adrv9361(
+            shell,
+            iio_uri=args.iio_uri,
+            out_dir=args.out,
+            plat=plat,
+            bind=bind,
+            rx_cpu=args.rx_cpu,
+            receiver=args.receiver,
+        )
+    else:
+        shell = SshShell(args.target)
+        comps = build_components_from_board(
+            shell,
+            board_ip=board_ip,
+            out_dir=args.out,
+            bind=bind,
+            rx_interface=args.rx_interface,
+            rx_cpu=args.rx_cpu,
+            hopctrl_base=hopctrl_base,
+            iio_uri=args.iio_uri,
+            receiver=args.receiver,
+        )
     cfg = RunConfig(
         plan=plan,
         out_dir=args.out,
         sample_rate_hz=fs,
         framer=fcfg,
-        provenance={"hopcap_commit": _git_sha(), "iio_uri": args.iio_uri, "target": args.target},
+        provenance={
+            "hopcap_commit": _git_sha(),
+            "iio_uri": args.iio_uri,
+            "target": args.target,
+            "platform": plat.name,
+        },
         expected_peer=(fcfg.source_ip, fcfg.source_port),
         lookahead_hops=args.lookahead,
+        platform=plat,
     )
-    report = run_live(cfg, comps)
+    try:
+        report = run_live(cfg, comps)
+    finally:
+        close = getattr(shell, "close", None)
+        if close:
+            close()
     print(f"hopcap run: {report.disposition} -> {report.out_dir}")
     return 0 if report.disposition == "ok" else 1
 
@@ -368,16 +530,31 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("plan", help="compile a plan; --dry-run prints JSON and touches no hardware")
     p.add_argument("--plan", required=True, type=Path)
     p.add_argument("--t0-ticks", type=int, default=0)
-    p.add_argument("--tick-hz", type=int, default=DEFAULT_TICK_HZ)
+    p.add_argument(
+        "--platform",
+        choices=sorted(platform_mod.PLATFORMS),
+        default=None,
+        help="default: the plan file's `platform` key, else zu11eg",
+    )
+    p.add_argument("--tick-hz", type=int, default=None, help="default: the platform's Tick clock")
     p.add_argument("--dry-run", action="store_true")
 
     r = sub.add_parser(
-        "run", help="live run against tron (or --dry-run to resolve everything offline)"
+        "run",
+        help="live run against tron or lablp (or --dry-run to resolve everything offline)",
     )
     r.add_argument("--plan", required=True, type=Path)
+    r.add_argument(
+        "--platform",
+        choices=sorted(platform_mod.PLATFORMS),
+        default=None,
+        help="default: the plan file's `platform` key, else zu11eg",
+    )
     r.add_argument("--iio-uri", required=True, help="e.g. ip:10.0.0.79")
     r.add_argument("--target", required=True, help="ssh target, e.g. root@10.0.0.79")
-    r.add_argument("--bind", default="192.0.2.2:4991")
+    r.add_argument(
+        "--bind", default=None, help="receiver address:port (default: the platform's receiver)"
+    )
     r.add_argument(
         "--rx-interface",
         default=None,
@@ -389,10 +566,15 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help="receiver MAC (default: nemo's NIC for VRT49_PHYSICAL_PORT, see hopcap.link)",
     )
-    r.add_argument("--hopctrl-base", type=lambda v: int(v, 0), default=0x84AC0000)
+    r.add_argument(
+        "--hopctrl-base",
+        type=lambda v: int(v, 0),
+        default=None,
+        help="default: the platform's (zu11eg 0x84AC0000, adrv9361 0x44AB0000)",
+    )
     r.add_argument("--receiver", choices=("c", "python"), default="c")
     r.add_argument("--lookahead", type=int, default=4)
-    r.add_argument("--tick-hz", type=int, default=DEFAULT_TICK_HZ)
+    r.add_argument("--tick-hz", type=int, default=None, help="default: the platform's Tick clock")
     r.add_argument("--settle-us", type=float)
     r.add_argument("--capture-us", type=float)
     r.add_argument("--capture-samples", type=int)
@@ -437,8 +619,18 @@ def main(argv: list[str] | None = None) -> int:
     args = ap.parse_args(argv)
     try:
         if args.cmd == "plan":
-            plan, fs = load_plan(args.plan, tick_hz=args.tick_hz)
-            out = dry_run(plan, fs=fs, t0_ticks=args.t0_ticks, tick_hz=args.tick_hz)
+            plat = plan_platform(args.plan, args.platform)
+            tick_hz = args.tick_hz or plat.tick_hz
+            if plat.hop_mode == "fastlock":
+                out = dry_run_fastlock(
+                    load_fastlock_plan(args.plan),
+                    t0_ticks=args.t0_ticks,
+                    plat=plat,
+                    tick_hz=tick_hz,
+                )
+            else:
+                plan, fs = load_plan(args.plan, tick_hz=tick_hz)
+                out = dry_run(plan, fs=fs, t0_ticks=args.t0_ticks, tick_hz=tick_hz)
             json.dump(out, sys.stdout, indent=2)
             sys.stdout.write("\n")
             return 0
