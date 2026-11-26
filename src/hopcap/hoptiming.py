@@ -139,8 +139,14 @@ def measure_hop(
         samples=len(z),
     )
     if len(z) < 4 * window:
-        return HopTiming(**base, crossing_ticks=None, latency_ns=None, old_tone_db=None,
-                         new_tone_db=None, note="no samples around the edge")
+        return HopTiming(
+            **base,
+            crossing_ticks=None,
+            latency_ns=None,
+            old_tone_db=None,
+            new_tone_db=None,
+            note="no samples around the edge",
+        )
     t_s = (t - executed_ticks) / tick_hz
     p_old = _tone_power(t_s, z, f_old, window)
     p_new = _tone_power(t_s, z, f_new, window)
@@ -151,8 +157,14 @@ def measure_hop(
         np.arange(len(z)) >= half
     )
     if not pre.any():
-        return HopTiming(**base, crossing_ticks=None, latency_ns=None, old_tone_db=None,
-                         new_tone_db=None, note="no samples before the edge")
+        return HopTiming(
+            **base,
+            crossing_ticks=None,
+            latency_ns=None,
+            old_tone_db=None,
+            new_tone_db=None,
+            note="no samples before the edge",
+        )
     old_db = float(10 * np.log10(np.median(p_old[pre]) / max(np.median(p_new[pre]), 1e-12)))
     newer = (p_new > p_old) & (t_s > -1e-3)
     idx = np.arange(len(z))
@@ -166,8 +178,14 @@ def measure_hop(
             crossing = int(i)
             break
     if crossing is None:
-        return HopTiming(**base, crossing_ticks=None, latency_ns=None, old_tone_db=old_db,
-                         new_tone_db=None, note="new tone never dominated")
+        return HopTiming(
+            **base,
+            crossing_ticks=None,
+            latency_ns=None,
+            old_tone_db=old_db,
+            new_tone_db=None,
+            note="new tone never dominated",
+        )
     # sub-sample: linear interpolation of (p_new - p_old) through zero
     if crossing > 0:
         d0 = p_new[crossing - 1] - p_old[crossing - 1]
@@ -207,7 +225,11 @@ def summarize(hops: Sequence[HopTiming]) -> dict:
         }
 
     measured = [h for h in hops if h.latency_ns is not None]
-    out = {"hops": len(hops), "measured": len(measured), "all": stats([h.latency_ns for h in measured])}
+    out = {
+        "hops": len(hops),
+        "measured": len(measured),
+        "all": stats([h.latency_ns for h in measured]),
+    }
     for kind in ("rx-only", "tx-only", "both"):
         out[kind] = stats([h.latency_ns for h in measured if h.kind == kind])
     return out

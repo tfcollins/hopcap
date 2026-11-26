@@ -58,6 +58,11 @@ class RunConfig:
     hopctrl_drain_timeout_ticks: int = 0
     sequence_mode: bool = False
     platform: Platform = ZU11EG  # FastLock platforms take the plan's sample rate
+    # Gapless timing run (FastLock): the hop controller is programmed and then disabled, which
+    # forces its gate open, so samples stream continuously across every edge and the hop is
+    # visible in the capture. No Context packets are stamped; hop landing is measured from the
+    # loopback tone instead (hopcap.hoptiming).
+    gapless: bool = False
 
 
 @dataclass
@@ -147,12 +152,14 @@ def build_components_from_board(
 @dataclass
 class RunReport:
     compiled: CompiledPlan
-    result: AssociationResult
+    result: AssociationResult | None
     manifest: dict
     out_dir: Path
 
     @property
     def disposition(self) -> str:
+        if self.result is None:  # gapless timing run: no association
+            return self.manifest.get("disposition", "incomplete")
         return self.result.disposition
 
 
@@ -304,6 +311,10 @@ def run_live(cfg: RunConfig, c: Components) -> RunReport:
             sequence_mode=cfg.sequence_mode,
             drain_timeout_ticks=cfg.hopctrl_drain_timeout_ticks,
         )
+        if cfg.gapless:
+            if not fastlock:
+                raise ValueError("gapless timing runs need a FastLock plan")
+            hc.disable()  # gate forced open for the whole run
         tb_armed = framer_mod.configure(
             c.framer, cfg.framer, sleep=c.sleep, monotonic=c.monotonic, after_arm=c.time_align
         )
@@ -361,7 +372,11 @@ def run_live(cfg: RunConfig, c: Components) -> RunReport:
 
     # 5. drain and collect
     executed = sum(1 for e in edges if e.executed)
-    hc_after = hc.wait_drained(expected_events=hc_before.epoch + executed, sleep=c.sleep)
+    if cfg.gapless:
+        c.sleep(0.05)  # let the last post-edge window arrive
+        hc_after = hc.status()
+    else:
+        hc_after = hc.wait_drained(expected_events=hc_before.epoch + executed, sleep=c.sleep)
     framer_mod.disable(c.framer)
     framer_after = framer_mod.counters(c.framer)
     tb_after = framer_mod.time_base_state(c.framer) if cfg.framer.time_base else None
@@ -377,6 +392,30 @@ def run_live(cfg: RunConfig, c: Components) -> RunReport:
     # 6. associate and export
     with spool_path.open("rb") as fp:
         records = list(iter_records(fp, strict=False))
+    if cfg.gapless:
+        return _finish_gapless(
+            cfg,
+            c,
+            compiled=compiled,
+            edges=edges,
+            records=records,
+            out_dir=out_dir,
+            tick_info=tick_info,
+            tb_armed=tb_armed,
+            pps_before=pps_before,
+            pps_after=pps_after,
+            tb_after=tb_after,
+            framer_before=framer_before,
+            framer_after=framer_after,
+            rx_summary=rx_summary,
+            hc_before=hc_before,
+            hc_after=hc_after,
+            tick_after=tick_after,
+            plan=fl_plan,
+            t0=t0,
+            rtt=rtt,
+            lead=lead,
+        )
     result = associate(
         records,
         compiled,
@@ -459,3 +498,115 @@ def run_live(cfg: RunConfig, c: Components) -> RunReport:
         f"run {result.disposition}: {sum(h.complete for h in result.hops)}/{len(result.hops)} hops complete"
     )
     return RunReport(compiled=compiled, result=result, manifest=manifest, out_dir=out_dir)
+
+
+def _finish_gapless(
+    cfg,
+    c,
+    *,
+    compiled,
+    edges,
+    records,
+    out_dir,
+    tick_info,
+    tb_armed,
+    pps_before,
+    pps_after,
+    tb_after,
+    framer_before,
+    framer_after,
+    rx_summary,
+    hc_before,
+    hc_after,
+    tick_after,
+    plan,
+    t0,
+    rtt,
+    lead,
+) -> RunReport:
+    """Gapless FastLock run: measure where every executed hop lands in the capture."""
+    import json
+
+    from hopcap import hoptiming
+    from hopcap.export import write_sums
+
+    tick_hz = tick_info["time_tick_hz"]
+    q32 = tb_armed["after_arm"]["ps_per_sample_q32"]
+    pps = pps_after or pps_before or {}
+    beats_per_pps = int(pps.get("beats_per_pps") or plan.sample_rate_hz)
+    stream = hoptiming.SampleStream.from_records(
+        records,
+        tick_hz=tick_hz,
+        ps_per_sample_q32=q32,
+        beats_per_pps=beats_per_pps,
+        expected_peer=cfg.expected_peer,
+    )
+    slots = [(s.rx_lo_hz, s.tx_lo_hz) for s in plan.slots]
+    f_dds = getattr(c.stager, "f_dds_hz", None) or plan.f_dds_hz
+    hops, prev = [], 0  # profile 0 is live before hop 0
+    for e in edges:
+        if e.executed:
+            hops.append(
+                hoptiming.measure_hop(
+                    stream,
+                    index=e.index,
+                    executed_ticks=e.executed_ticks,
+                    from_slot=prev,
+                    to_slot=e.slot,
+                    slots=slots,
+                    f_dds_hz=f_dds,
+                    tick_hz=tick_hz,
+                )
+            )
+        prev = e.slot
+    summary = hoptiming.summarize(hops)
+    complete = all(h.latency_ns is not None for h in hops) and len(hops) == len(edges)
+    manifest = {
+        "schema": "hopcap-gapless-1",
+        "mode": "gapless",
+        "plan": plan.name,
+        "platform": cfg.platform.name,
+        "provenance": cfg.provenance,
+        "disposition": "ok" if complete else "incomplete",
+        "f_dds_hz": f_dds,
+        "slots": slots,
+        "edges": [vars(e) for e in edges],
+        "hop_timing": [h.as_dict() for h in hops],
+        "hop_timing_summary": summary,
+        "samples": len(stream.iq),
+        "tick": {
+            **tick_info,
+            "t0_ticks": t0,
+            "transport_rtt_ticks": rtt,
+            "lead_ticks": lead,
+            "late_count_delta": tick_after["late_count"] - tick_info["late_count"],
+            "overflow_count_delta": tick_after["overflow_count"] - tick_info["overflow_count"],
+        },
+        "hopctrl": {"before": hc_before.as_dict(), "after": hc_after.as_dict()},
+        "time_base": {
+            "armed": tb_armed,
+            "after": tb_after,
+            "pps_period_before": pps_before,
+            "pps_period_after": pps_after,
+            "beats_per_pps_used": beats_per_pps,
+            "stamps": stamps_mod.check(
+                records, ps_per_sample_q32=q32, expected_peer=cfg.expected_peer
+            ),
+        },
+        "counters": {
+            "framer": framer_mod.delta(framer_before, framer_after),
+            "receiver": rx_summary,
+        },
+        "fastlock": {
+            "plan": compiled.fastlock.as_dict(),
+            "bank": getattr(c.stager, "record", None),
+        },
+    }
+    (out_dir / "manifest.json").write_text(json.dumps(manifest, indent=2, default=str) + "\n")
+    write_sums(out_dir)
+    a = summary.get("all", {})
+    c.log(
+        f"gapless run {manifest['disposition']}: {summary['measured']}/{len(edges)} hops measured; "
+        f"latency mean {a.get('mean_ns', float('nan')):.1f} ns spread {a.get('spread_ns', float('nan')):.1f} ns"
+    )
+    return RunReport(compiled=compiled, result=None, manifest=manifest, out_dir=out_dir)

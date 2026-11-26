@@ -414,13 +414,20 @@ class LablpSession:
         ).align()
         return {"armed": armed, "pps_period": period, "tick_alignment": aligned}
 
-    def run_plan(self, plan_path: Path, *, rx_cpu: int | None = None) -> dict:
+    def run_plan(
+        self,
+        plan_path: Path,
+        *,
+        rx_cpu: int | None = None,
+        gapless: bool = False,
+        name: str = "run",
+    ) -> dict:
         from hopcap.cli import _git_sha, load_fastlock_plan
         from hopcap.framer import FramerConfig
         from hopcap.run import RunConfig, build_components_adrv9361, run_live
 
         plan = load_fastlock_plan(plan_path)
-        out = self.evidence / "run"
+        out = self.evidence / name
         comps = build_components_adrv9361(
             self.shell, iio_uri=self.iio_uri, out_dir=out, plat=self.plat, rx_cpu=rx_cpu
         )
@@ -439,9 +446,13 @@ class LablpSession:
             expected_peer=(fcfg.source_ip, fcfg.source_port),
             lookahead_hops=7,
             platform=self.plat,
+            gapless=gapless,
         )
         report = run_live(cfg, comps)
-        return {"disposition": report.disposition, "out_dir": str(out)}
+        out_d = {"disposition": report.disposition, "out_dir": str(out), "gapless": gapless}
+        if gapless:
+            out_d["hop_timing_summary"] = report.manifest.get("hop_timing_summary")
+        return out_d
 
     # -- the whole session -----------------------------------------------------------------
     def _framer_io(self) -> tuple:
@@ -484,6 +495,13 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--plan", type=Path, default=os.environ.get("HOPCAP_PLAN") or DEFAULT_PLAN)
     ap.add_argument("--no-run", action="store_true", help="bring-up only, no hop run")
     ap.add_argument("--rx-cpu", type=int, default=None)
+    ap.add_argument(
+        "--mode",
+        choices=("gated", "gapless", "both"),
+        default=os.environ.get("HOPCAP_LABLP_MODE", "gated"),
+        help="gated: Context-stamped capture windows; gapless: continuous capture for hop "
+        "landing times; both: one of each in the same session",
+    )
     args = ap.parse_args(argv)
     uri = os.environ.get("IIO_URI", "")
     try:
@@ -509,13 +527,22 @@ def main(argv: list[str] | None = None) -> int:
         try:
             session.bring_up()
             if not args.no_run:
-                session.stage("run", lambda: session.run_plan(args.plan, rx_cpu=args.rx_cpu))
+                if args.mode in ("gated", "both"):
+                    session.stage("run", lambda: session.run_plan(args.plan, rx_cpu=args.rx_cpu))
+                if args.mode in ("gapless", "both"):
+                    session.stage(
+                        "gapless",
+                        lambda: session.run_plan(
+                            args.plan, rx_cpu=args.rx_cpu, gapless=True, name="gapless"
+                        ),
+                    )
         finally:
             shell.close()
     except Exception as exc:
         print(f"lablp session: {type(exc).__name__}: {exc}", file=sys.stderr)
         return 1
-    result = session.record.get("run", {}).get("disposition", "bring-up ok")
+    runs = [session.record[k]["disposition"] for k in ("run", "gapless") if k in session.record]
+    result = "bring-up ok" if not runs else ("ok" if all(r == "ok" for r in runs) else "incomplete")
     print(f"lablp session: {result}; evidence {args.evidence}")
     return 0 if result in ("ok", "bring-up ok") else 1
 
