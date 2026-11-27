@@ -8,13 +8,16 @@ Verify lab facts against `~/dev/infra/HOSTS.md` before use.
 
 ## What runs where
 
+Addresses appear as `{receiver-ip}` and `{framer-ip}`. The real values are in the lab inventory,
+not in this repository.
+
 | Piece | Where | Notes |
 |---|---|---|
 | Board | ADRV9361-Z7035 on ADRV1CRR-FMC, place `lablp` | boots its stock Kuiper 2023_R2_P1 SD card; the SD card is never written |
 | Bitstream | `system_top.bin` from `scripts/build_bitstream.sh` (profile `adrv9361`) | byte-swapped for the Zynq-7000 FPGA manager, loaded at runtime |
 | Overlay | `kernel/dts/zynq-adrv9361z7035-hopcap-overlay.dts` | compiled with `dtc -@` by the session |
 | Modules | `axi_timed_command_scheduler.ko`, `iio-vrt49-buffer.ko` | `scripts/build_lablp_modules.sh` (ARMv7, `6.1.70-284114-g2e8908932dfd`) |
-| Receiver | nemo `enp7s0` (e1000e, `68:05:ca:19:88:8c`, `192.168.2.10/24`) | the 1G SFP is cabled there; the framer sends from `192.168.2.211` |
+| Receiver | nemo `enp7s0` (e1000e, `{receiver-ip}/24`) | the 1G SFP is cabled there; the framer sends from `{framer-ip}` on the same subnet |
 
 ## 1. Build the modules
 
@@ -46,9 +49,15 @@ baseband at `tx_lo - rx_lo + f_dds`. `FastLockPlan.validate()` rejects:
 - a tone offset outside ±0.4 fs, or within `dc_guard_hz` of DC;
 - consecutive hops whose offsets coincide (closer than `min_step_hz`), or where the new offset
   sits on the previous tone's image;
-- a period under 1 s. Each rising edge's Tick completion must be acknowledged over network IIO
-  before the next edge (Tick's completion window holds one entry, and LATE_DROP drops a held
-  command). On lablp, network IIO calls stall in steps of about 1 s.
+- a period under 1 s. This floor comes from the first runs, which asked Tick for a completion
+  on every rise. Tick's completion window holds one entry, so each rise had to be acknowledged
+  over network IIO before the next one could run, and on lablp those calls stall in steps of
+  about 1 s. A rise held that way ran late, which caused the 4-of-16
+  late hops of the first bring-up. FastLock runs now schedule their rises without
+  REPORT_COMPLETION: each edge is recorded as `SCHEDULED` at its requested tick, and the run
+  proves the edges fired on time from Tick's late and overflow counters, which must not move.
+  The completion window no longer limits the period. The 1 s floor stays because it is the
+  envelope that has been validated.
 
 The two example plans run at 15.36 MSPS with LOs near 2.4 GHz and a 1.25 s period. The period is
 not a whole second, so the hops sample several phases of the PPS second. Both plans include
@@ -73,7 +82,7 @@ python3 examples/hardware/adrv9361_hopcap.py --run
 
 `--run` does the following:
 
-1. Checks nemo's `enp7s0` (by MAC and driver). Its `192.168.2.10/24` address is only reported
+1. Checks nemo's `enp7s0` (by MAC and driver). Its `{receiver-ip}/24` address is only reported
    here, because the NIC has carrier only while lablp is powered; the session's `host_receiver`
    stage requires it once the SFP link is up. Artifact paths are made absolute.
 2. Records the place header. The rest of the listing is never kept, because it carries the power
@@ -96,7 +105,7 @@ against `IIO_URI`. Each stage's result, or its error, is written to `session.jso
 | `radio` | 15.36 MSPS, RF bandwidth, manual RX gain, TX attenuation, TX1 DDS tone at `f_dds` (1 MHz) | an attribute is missing or the rate reads back wrong |
 | `rx_buffer` | `in_voltage0..3` and the `cf-ad9361-lpc` buffer on | not exactly those four channels enabled |
 | `link` | framer UDP endpoint = `enp7s0` (applied, read back), PCS status at framer `0x78` | `resetdone` (bit 16) is 0, or the module is absent |
-| `host_receiver` | `192.168.2.10/24` on `enp7s0` on this host, now that the SFP has carrier | the address does not appear within ~30 s |
+| `host_receiver` | `{receiver-ip}/24` on `enp7s0` on this host, now that the SFP has carrier | the address does not appear within ~30 s |
 | `timebase` | time base on PPS source `tick`, LOCKED; measured beats per PPS; Tick epoch aligned (below) | not locked, period outside the margin, or the alignment check fails |
 | `run` | gated `run_live` with the plan; bundle in `$HOPCAP_OUT/run` | the run's disposition is not `ok` |
 | `gapless` | the same plan with the hop controller disabled (continuous stream); hop landing times in `$HOPCAP_OUT/gapless` | a hop is unmeasured, or Tick's late/overflow counters moved |
@@ -180,7 +189,7 @@ hopcap run --plan examples/plans/adrv9361-loopback-3slot.json \
 ```
 
 `--platform adrv9361` is implied by the plan's `platform` key. The receiver binds
-`192.168.2.10:4991` (nemo `enp7s0`), the framer sends from `192.168.2.211`, and ssh uses
+`{receiver-ip}:4991` (nemo `enp7s0`), the framer sends from `{framer-ip}`, and ssh uses
 `HOPCAP_TARGET_PASSWORD` (default `analog`).
 
 ## 7. Prove the hops (HIL)
@@ -220,6 +229,8 @@ LO only, or both, on different edges. TX1 carries a DDS tone at `f_dds`, so the 
 - The path is: Tick edge → CTRL_IN IOB register (one 20 ns tick, deterministic) → AD9361
   FastLock profile load and synthesizer settling → RX digital filters.
 - Measured on lablp over 4 boots × 16 hops: 2.4–11.7 µs, with per-boot means of 4.0–6.4 µs.
+  In the CI runs since then, every hop fell between 2.2 and 13.4 µs. See the
+  [2026-11-26 report](../reports/2026-11-26-lablp-hop-timing.md).
 - The spread is synthesizer settling: the same transitions are slow on every boot. It is not
   jitter in when the hop command fires.
 - The window catches a hop scheduled at the wrong time. It would also have caught the

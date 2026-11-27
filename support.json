@@ -40,6 +40,34 @@
           "note": "Talise settle time is a configured knob, not a measurement"
         }
       }
+    },
+    "adrv9361-z7035": {
+      "carrier": "adrv1crr-fmc",
+      "labgrid_place": "lablp",
+      "hdl_release": "hdl_2026_r1",
+      "features": {
+        "fastlock-hop": {
+          "status": "validated",
+          "tier": 2,
+          "workflow": "hw-test-adrv9361.yml",
+          "evidence": "https://tfcollins.github.io/hopcap/reports/2026-11-26-lablp-hop-timing.html",
+          "note": "Tick-timed AD9361 FastLock pin-select hop (CTRL_IN[3:1]) of RX and TX together; every hop lands 2.2-13.4 us after its Tick timestamp over 3-boot repeat runs (window 1-15 us)"
+        },
+        "stream-gate": {
+          "status": "validated",
+          "tier": 2,
+          "workflow": "hw-test-adrv9361.yml",
+          "evidence": "https://tfcollins.github.io/hopcap/reports/2026-11-26-lablp-hop-timing.html",
+          "note": "vrt49_fhm_hop_ctrl gates each capture window after the hop; 16/16 windows per boot carry the slot's RX and TX tone"
+        },
+        "vrt-udp-1g": {
+          "status": "validated",
+          "tier": 2,
+          "workflow": "hw-test-adrv9361.yml",
+          "evidence": "https://tfcollins.github.io/hopcap/reports/2026-11-26-lablp-hop-timing.html",
+          "note": "1G SFP to the nemo runner; gapless and gated runs with zero tap drops"
+        }
+      }
     }
   }
 }
